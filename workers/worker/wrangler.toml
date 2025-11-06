@@ -1,0 +1,75 @@
+﻿name = "epir-art-jewellery-worker"
+main = "src/index.ts"
+compatibility_date = "2025-09-30"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[build]
+command = ""
+
+[durable_objects]
+bindings = [
+  { name = "SESSION_DO", class_name = "SessionDO" },
+  { name = "RATE_LIMITER_DO", class_name = "RateLimiterDO" },
+  { name = "TOKEN_VAULT_DO", class_name = "TokenVaultDO" }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "epir_art_jewellery"
+database_id = "6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23"
+
+[[kv_namespaces]]
+binding = "SESSIONS_KV"
+id = "08f16276a9b14ca7b3c00404e8e8d0d9"
+
+[[vectorize]]
+binding = "VECTOR_INDEX"
+index_name = "autorag-epir-chatbot-rag"
+
+# Queues require paid plan - commented out for now
+# [[queues.producers]]
+# binding = "INDEX_QUEUE"
+# queue = "epir-index-queue"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionDO"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RateLimiterDO"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["TokenVaultDO"]
+
+# AI binding
+[ai]
+binding = "AI"
+
+# Service binding to analytics worker
+[[services]]
+binding = "ANALYTICS"
+service = "epir-analityc-worker"
+
+# Routes - subdomena dla Workera
+[[routes]]
+pattern = "asystent.epirbizuteria.pl/*"
+zone_name = "epirbizuteria.pl"
+
+[observability]
+enabled = true
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+[vars]
+ALLOWED_ORIGIN = "https://epir-art-silver-jewellery.myshopify.com"
+SHOP_DOMAIN = "epir-art-silver-jewellery.myshopify.com"
+# WORKER_ORIGIN: URL Workera dla internal MCP calls (używane w rag.ts callMcpTool)
+# W produkcji: https://epir-art-jewellery-worker.krzysztofdzugaj.workers.dev
+# W dev: https://asystent-epir.YOUR-NAME.workers.dev
+WORKER_ORIGIN = "https://epir-art-jewellery-worker.krzysztofdzugaj.workers.dev"
+

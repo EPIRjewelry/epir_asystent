@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Cloudflare Workers
+.wrangler/
+wrangler.toml.backup
+*.log
+
+# Environment
+.env
+.env.local
+.dev.vars
+
+# Build outputs
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+coverage/
+test-results/
+playwright-report/
+
+# Temporary files
+*.tmp
+*.backup
+*.bak
+*.old

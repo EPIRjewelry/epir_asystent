@@ -1,0 +1,13 @@
+{
+  "name": "epir-analityc-worker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.45.0",
+    "@cloudflare/workers-types": "^4.20241022.0"
+  }
+}

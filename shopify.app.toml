@@ -1,0 +1,27 @@
+# Kanoniczny config - Agent EPIR (produkcyjny)
+# Ten plik zawiera produkcyjne ustawienia aplikacji Agent EPIR.
+client_id = "abbb8988e6c96ba5ca0c3545de0d3491"
+name = "Agent EPIR Art Jewellery"
+application_url = "https://asystent.epirbizuteria.pl"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-01"
+
+[access_scopes]
+# dopasuj scopes jeżeli wymagane przez aplikację
+scopes = "customer_read_customers,customer_read_orders,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,unauthenticated_read_product_listings"
+
+[auth]
+redirect_urls = [
+  "https://asystent.epirbizuteria.pl/api/auth"
+]
+
+# App Proxy – ustawione tak, by Shopify kierował żądania z /apps/assistant/* do Twojego workera
+[app_proxy]
+url = "https://asystent.epirbizuteria.pl"
+subpath = "assistant"
+prefix = "apps"

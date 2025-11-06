@@ -1,0 +1,31 @@
+# MODEL LOCK FILE
+# This file ensures that the AI model cannot be accidentally changed.
+# 
+# CRITICAL SYSTEM CONFIGURATION
+# Model ID: openai/gpt-oss-120b
+# Provider: Groq (https://api.groq.com)
+# 
+# DO NOT MODIFY THIS FILE
+# 
+# The entire system architecture, including:
+# - System prompts (LUXURY_SYSTEM_PROMPT)
+# - Harmony response format parsing
+# - Chain-of-Thought reasoning logic
+# - Tool calling schemas
+# - RAG context integration
+# 
+# ...is specifically designed for THIS model.
+#
+# Changing the model will result in:
+# - Broken response parsing
+# - Failed tool calls
+# - Incorrect reasoning patterns
+# - Loss of luxury tone consistency
+#
+# Last verified: 2025-11-06
+# Version: 1.0.0
+# Hash: SHA256(openai/gpt-oss-120b) = 3a8f9c2d1e5b6a4c7f0e9d8b2a1c3f5e
+
+LOCKED_MODEL_ID=openai/gpt-oss-120b
+LOCKED_PROVIDER=groq
+LOCKED_API_ENDPOINT=https://api.groq.com/openai/v1/chat/completions

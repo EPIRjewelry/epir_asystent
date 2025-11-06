@@ -1,0 +1,159 @@
+{% comment %}
+  Plik sekcji dla Asystenta Klienta AI EPIR-ART-JEWELLERY.
+  Osadza widget czatu i inicjalizuje go danymi z Liquid.
+  Zawiera poprawki dotyczące bezpieczeństwa (endpoint configuration) i UX.
+{% endcomment %}
+
+{% liquid
+  assign default_title = 'Zapytaj Doradcę EPIR-ART'
+  assign default_greeting = 'Witaj w EPIR-ART. Jestem Twoim osobistym doradcą AI, gotowym pomóc w wyborze idealnej biżuterii.'
+  assign default_placeholder = 'Wpisz wiadomość, np. „Pokaż mi pierścionki zaręczynowe z szafirem”'
+  assign default_start_closed = false
+  assign app_version = 'v1.1.2-rag-stream'
+%}
+
+{% schema %}
+{
+  "name": "Asystent Klienta AI",
+  "target": "section",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Ustawienia Ogólne Widgetu"
+    },
+    {
+      "type": "text",
+      "id": "title",
+      "label": "Tytuł Widgetu",
+      "default": "Zapytaj Doradcę EPIR-ART"
+    },
+    {
+      "type": "text",
+      "id": "greeting_message",
+      "label": "Wiadomość Powitalna",
+      "default": "Witaj w EPIR-ART. Jestem Twoim osobistym doradcą AI, gotowym pomóc w wyborze idealnej biżuterii."
+    },
+    {
+      "type": "text",
+      "id": "input_placeholder",
+      "label": "Tekst w polu wprowadzania",
+      "default": "Wpisz wiadomość, np. „Pokaż mi pierścionki zaręczynowe z szafirem”"
+    },
+    {
+      "type": "checkbox",
+      "id": "start_closed",
+      "label": "Uruchom widżet zamknięty (domyślnie otwarty)",
+      "default": false
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Kolor Akcentujący (Przycisk)",
+      "default": "#8B7D6A"
+    }
+  ],
+  "default": {
+    "settings": {
+      "title": "Zapytaj Doradcę EPIR-ART",
+      "greeting_message": "Witaj w EPIR-ART. Jestem Twoim osobistym doradcą AI, gotowym pomóc w wyborze idealnej biżuterii.",
+      "start_closed": false
+    }
+  }
+}
+{% endschema %}
+
+{% comment %}
+  Używamy atrybutów data-* do konfiguracji skryptu, co eliminuje hardkodowanie.
+{% endcomment %}
+<section id="epir-assistant-section"
+  class="epir-assistant epir-assistant-section {% if section.settings.start_closed %}epir-assistant--closed{% else %}epir-assistant--bottom-right{% endif %}"
+  aria-live="polite"
+  data-app-version="{{ app_version }}"
+  data-shop-domain="{{ shop.myshopify_domain }}"
+  data-logged-in-customer-id="{{ customer.id | default: '' }}"
+  data-worker-endpoint="/apps/assistant/chat"
+  data-start-closed="{{ section.settings.start_closed | default: default_start_closed }}"
+  data-stream-render="dots"
+>
+  <style>
+    /* Dodanie dynamicznego koloru akcentującego z ustawień liquid */
+    #epir-assistant-section .assistant-form button {
+        background-color: {{ section.settings.accent_color | default: '#8B7D6A' }};
+    }
+    #epir-assistant-section .assistant-status {
+        color: {{ section.settings.accent_color | default: '#8B7D6A' }};
+    }
+    #epir-assistant-section #assistant-input:focus {
+        border-color: {{ section.settings.accent_color | default: '#8B7D6A' }};
+    }
+  </style>
+
+  <div class="assistant-container">
+    <div class="assistant-header" role="heading" aria-level="3">
+  <!-- Banner informacyjny dla klientów rozpoznanych lokalnie, ale nie zalogowanych -->
+  <div id="local-memory-banner" style="display:none; background:#f8f4f0; color:#222; padding:16px; border-radius:8px; margin-bottom:16px; font-size:1rem;">
+    <strong>Personalizacja na tym urządzeniu</strong><br>
+    Czy chcesz, abym korzystał z informacji zapisanych na tym urządzeniu, by spersonalizować odpowiedzi?<br>
+    <span style="font-size:0.95em; color:#555;">Zapamiętuję to wyłącznie na tym urządzeniu (dopóki nie wyczyścisz cache). Aby rozpoznać Cię na innych urządzeniach, zaloguj się.</span>
+  </div>
+      <h3>{{ section.settings.title | default: default_title }}</h3>
+      <button id="assistant-toggle-button" aria-expanded="{% if section.settings.start_closed %}false{% else %}true{% endif %}" aria-controls="assistant-content">
+        <span aria-hidden="true">{% if section.settings.start_closed %}Otwórz{% else %}Zamknij{% endif %}</span>
+        <span class="sr-only">Przełącz widoczność asystenta</span>
+      </button>
+    </div>
+
+    <div id="assistant-content" class="assistant-content {% if section.settings.start_closed %}is-closed{% endif %}">
+        <div id="assistant-messages" class="assistant-messages" role="log" aria-atomic="false" aria-live="polite">
+          {% comment %} Wiadomość powitalna ładowana jest tylko raz {% endcomment %}
+          <div class="msg msg-assistant welcome-message" role="status">
+            {{ section.settings.greeting_message | default: default_greeting }}
+          </div>
+        </div>
+
+        <form id="assistant-form" class="assistant-form">
+          <label for="assistant-input" class="sr-only">Wpisz wiadomość do doradcy</label>
+          <input
+            id="assistant-input"
+            type="text"
+            placeholder="{{ section.settings.input_placeholder | default: default_placeholder }}"
+            autocomplete="off"
+            required
+            maxlength="256" 
+            aria-required="true"
+          />
+          <button type="submit" id="assistant-send-button" aria-label="Wyślij wiadomość">
+            Wyślij
+          </button>
+        </form>
+        <div id="assistant-status" class="assistant-status" role="status" aria-live="polite"></div>
+        <div id="assistant-loader" class="assistant-loader" style="display:none" aria-live="polite" aria-label="Oczekiwanie na odpowiedź">
+          <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
+        </div>
+    </div>
+  </div>
+</section>
+
+<script src="{{ 'assistant.js' | asset_url }}" defer="defer" type="module"></script>
+<link href="{{ 'assistant.css' | asset_url }}" rel="stylesheet" type="text/css"/>
+<style>
+  .assistant-loader {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 32px;
+    font-size: 2em;
+    color: {{ section.settings.accent_color | default: '#8B7D6A' }};
+    margin-top: 8px;
+  }
+  .assistant-loader .dot {
+    animation: blink 1.4s infinite both;
+    margin: 0 2px;
+  }
+  .assistant-loader .dot:nth-child(2) { animation-delay: 0.2s; }
+  .assistant-loader .dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink {
+    0%, 80%, 100% { opacity: 0; }
+    40% { opacity: 1; }
+  }
+</style>

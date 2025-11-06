@@ -1,0 +1,57 @@
+<div id="epir-assistant-widget">
+  <div id="chat-bubble" class="chat-bubble-closed">
+    <!-- Ikona SVG dla bąbelka czatu -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+      <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 12H5v-2h14v2zm0-3H5V9h14v2zm0-3H5V6h14v2z"/>
+    </svg>
+  </div>
+
+  <div id="chat-window" class="chat-window-closed">
+    <div id="chat-header">
+      <span>Asystent EPIR</span>
+      <button id="close-chat-btn">&times;</button>
+    </div>
+    <div id="chat-messages">
+      <!-- Wiadomości będą dodawane dynamicznie przez JavaScript -->
+      <div class="message assistant">
+        Witaj w EPIR. Jestem Twoim osobistym asystentem jubilerskim. W czym mogę pomóc?
+      </div>
+    </div>
+    <div id="chat-input-container">
+      <input type="text" id="chat-input" placeholder="Napisz wiadomość..." autocomplete="off">
+      <button id="send-chat-btn">
+        <!-- Ikona SVG dla przycisku wysyłania -->
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
+          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "Asystent Klienta AI",
+  "target": "section",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Ustawienia Asystenta AI"
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_assistant",
+      "label": "Włącz asystenta",
+      "default": true
+    }
+  ],
+  "presets": [
+    {
+      "name": "Asystent Klienta AI"
+    }
+  ]
+}
+{% endschema %}
+
+{{ 'assistant.css' | asset_url | stylesheet_tag }}
+<script src="{{ 'assistant.js' | asset_url }}" defer="defer"></script>

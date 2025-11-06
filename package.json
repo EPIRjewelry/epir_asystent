@@ -1,0 +1,19 @@
+{
+  "name": "epir-art-jewellery",
+  "private": true,
+  "workspaces": [
+    "extensions/*",
+    "worker"
+  ],
+  "scripts": {
+    "test:e2e": "playwright test",
+    "dev": "shopify app dev",
+    "deploy": "shopify app deploy",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy"
+  }
+  ,
+  "devDependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}

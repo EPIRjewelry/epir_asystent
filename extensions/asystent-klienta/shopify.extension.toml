@@ -1,0 +1,17 @@
+name = "asystent-klienta"
+
+uid = "5f4dfd59-f8af-0e80-e5b4-cff1370635b3c870f68f"
+
+type = "theme"
+
+# The block file that the Theme App Extension exposes
+[block]
+path = "blocks/assistant.liquid"
+
+# Static assets included with the extension
+[assets]
+main = "assets/assistant.js"
+styles = "assets/assistant.css"
+
+# Locales included for translations
+locales = ["locales/en.default.json"]

@@ -1,0 +1,609 @@
+/**
+ * EPIR AI Assistant - Luksusowe style dla asystenta jubilerskiego
+ * Wykorzystuje CSS variables z Liquid dla customizacji w Theme Editor
+ * --epir-primary-color: główny kolor (domyślnie ciemny: #1a1a1a)
+ * --epir-accent-color: akcent (domyślnie złoty: #d4af37)
+ */
+
+:root {
+  --epir-primary-color: #1a1a1a;
+  --epir-accent-color: #d4af37;
+  --epir-font-family: 'Helvetica Neue', 'Segoe UI', Arial, sans-serif;
+  --epir-shadow-sm: 0 2px 8px rgba(0,0,0,0.08);
+  --epir-shadow-md: 0 4px 16px rgba(0,0,0,0.12);
+  --epir-shadow-lg: 0 8px 32px rgba(0,0,0,0.16);
+  --epir-transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --epir-border-radius: 12px;
+}
+
+/* ========================================
+   WIDGET CONTAINER (główny wrapper)
+======================================== */
+.epir-assistant {
+  font-family: var(--epir-font-family);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--epir-primary-color);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  z-index: 9999;
+}
+
+/* Inline mode (osadzony w sekcji) */
+.epir-assistant--inline {
+  position: relative;
+  max-width: 640px;
+  margin: 2rem auto;
+}
+
+/* Floating mode (bottom-right/left) */
+.epir-assistant--bottom-right,
+.epir-assistant--bottom-left {
+  position: fixed;
+  bottom: 24px;
+  z-index: 9999;
+}
+
+.epir-assistant--bottom-right {
+  right: 24px;
+}
+
+.epir-assistant--bottom-left {
+  left: 24px;
+}
+
+/* ========================================
+   FLOATING TOGGLE BUTTON (przycisk otwierający chat)
+======================================== */
+.epir-assistant__toggle-btn {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--epir-primary-color) 0%, #333 100%);
+  border: 2px solid var(--epir-accent-color);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--epir-shadow-lg);
+  transition: var(--epir-transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.epir-assistant__toggle-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+}
+
+.epir-assistant__toggle-btn:active {
+  transform: scale(0.95);
+}
+
+/* Pulsująca animacja (attention grabber) */
+.epir-assistant__toggle-btn::before {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid var(--epir-accent-color);
+  animation: epir-pulse 2s ease-out infinite;
+  opacity: 0;
+}
+
+@keyframes epir-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+/* Ikony w przycisku (chat i close) */
+.epir-assistant__icon {
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.epir-assistant__icon--close {
+  position: absolute;
+  opacity: 0;
+  transform: rotate(-90deg);
+}
+
+.epir-assistant__toggle-btn[aria-expanded="true"] .epir-assistant__icon--chat {
+  opacity: 0;
+  transform: rotate(90deg);
+}
+
+.epir-assistant__toggle-btn[aria-expanded="true"] .epir-assistant__icon--close {
+  opacity: 1;
+  transform: rotate(0deg);
+}
+
+/* ========================================
+   CHAT BOX (okno czatu)
+======================================== */
+.epir-assistant__chat-box {
+  background: #fff;
+  border-radius: var(--epir-border-radius);
+  box-shadow: var(--epir-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: var(--epir-transition);
+}
+
+/* Inline chat box */
+.epir-assistant--inline .epir-assistant__chat-box {
+  width: 100%;
+  height: 500px;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+/* Floating chat box (domyślnie ukryty) */
+.epir-assistant--bottom-right .epir-assistant__chat-box,
+.epir-assistant--bottom-left .epir-assistant__chat-box {
+  position: fixed;
+  bottom: 100px;
+  width: 380px;
+  max-width: calc(100vw - 48px);
+  height: 560px;
+  max-height: calc(100vh - 140px);
+}
+
+.epir-assistant--bottom-right .epir-assistant__chat-box {
+  right: 24px;
+}
+
+.epir-assistant--bottom-left .epir-assistant__chat-box {
+  left: 24px;
+}
+
+/* Hidden state (floating) */
+.epir-assistant__chat-box--hidden {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(20px) scale(0.95);
+  pointer-events: none;
+}
+
+/* ========================================
+   HEADER (tytuł i przycisk zamykania)
+======================================== */
+.epir-assistant__header {
+  background: linear-gradient(135deg, var(--epir-primary-color) 0%, #333 100%);
+  color: #fff;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 2px solid var(--epir-accent-color);
+}
+
+.epir-assistant__title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.epir-assistant__close-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: var(--epir-transition);
+}
+
+.epir-assistant__close-btn:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+/* Inline mode title (bez header, tylko h3) */
+.epir-assistant__inline-container .epir-assistant__title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: var(--epir-primary-color);
+  text-align: center;
+}
+
+/* ========================================
+   MESSAGES (kontener wiadomości)
+======================================== */
+.epir-assistant__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  background: linear-gradient(to bottom, #fafafa 0%, #fff 100%);
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+.epir-assistant__messages::-webkit-scrollbar {
+  width: 8px;
+}
+
+.epir-assistant__messages::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.epir-assistant__messages::-webkit-scrollbar-thumb {
+  background: var(--epir-accent-color);
+  border-radius: 4px;
+}
+
+.epir-assistant__messages::-webkit-scrollbar-thumb:hover {
+  background: #c49a2e;
+}
+
+/* ========================================
+   MESSAGE BUBBLES (bąbelki wiadomości)
+======================================== */
+.epir-message {
+  display: flex;
+  margin-bottom: 16px;
+  animation: epir-fade-in 0.4s ease-out;
+}
+
+@keyframes epir-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.epir-message--user {
+  justify-content: flex-end;
+}
+
+.epir-message--assistant {
+  justify-content: flex-start;
+}
+
+.epir-message__bubble {
+  max-width: 75%;
+  padding: 12px 16px;
+  border-radius: 18px;
+  word-wrap: break-word;
+  position: relative;
+}
+
+/* User message style */
+.epir-message--user .epir-message__bubble {
+  background: linear-gradient(135deg, var(--epir-accent-color) 0%, #c49a2e 100%);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  box-shadow: var(--epir-shadow-sm);
+}
+
+/* Assistant message style */
+.epir-message--assistant .epir-message__bubble {
+  background: #f5f5f5;
+  color: var(--epir-primary-color);
+  border: 1px solid rgba(0,0,0,0.06);
+  border-bottom-left-radius: 4px;
+  box-shadow: var(--epir-shadow-sm);
+}
+
+/* Typing indicator (loading animation) */
+.epir-message--typing .epir-message__bubble {
+  padding: 16px 20px;
+  background: #f5f5f5;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.epir-typing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--epir-accent-color);
+  animation: epir-typing 1.4s infinite ease-in-out;
+}
+
+.epir-typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.epir-typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes epir-typing {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.7;
+  }
+  30% {
+    transform: translateY(-10px);
+    opacity: 1;
+  }
+}
+
+/* ========================================
+   FORM (input + send button)
+======================================== */
+.epir-assistant__form {
+  display: flex;
+  gap: 8px;
+  padding: 16px;
+  background: #fff;
+  border-top: 1px solid rgba(0,0,0,0.08);
+}
+
+.epir-assistant__input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 24px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--epir-primary-color);
+  outline: none;
+  transition: var(--epir-transition);
+}
+
+.epir-assistant__input:focus {
+  border-color: var(--epir-accent-color);
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.1);
+}
+
+.epir-assistant__input::placeholder {
+  color: #999;
+}
+
+.epir-assistant__send-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--epir-accent-color) 0%, #c49a2e 100%);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--epir-transition);
+  box-shadow: var(--epir-shadow-sm);
+}
+
+.epir-assistant__send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: var(--epir-shadow-md);
+}
+
+.epir-assistant__send-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.epir-assistant__send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ========================================
+   RESPONSIVE (mobile-first)
+======================================== */
+@media (max-width: 640px) {
+  .epir-assistant--bottom-right,
+  .epir-assistant--bottom-left {
+    bottom: 16px;
+    right: 16px !important;
+    left: auto !important;
+  }
+
+  .epir-assistant--bottom-right .epir-assistant__chat-box,
+  .epir-assistant--bottom-left .epir-assistant__chat-box {
+    bottom: 84px;
+    right: 16px !important;
+    left: auto !important;
+    width: calc(100vw - 32px);
+    height: calc(100vh - 120px);
+  }
+
+  .epir-assistant__toggle-btn {
+    width: 56px;
+    height: 56px;
+  }
+
+  .epir-message__bubble {
+    max-width: 85%;
+  }
+}
+
+/* ========================================
+   ACCESSIBILITY & UTILITIES
+======================================== */
+.epir-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Focus visible (keyboard navigation) */
+.epir-assistant__toggle-btn:focus-visible,
+.epir-assistant__close-btn:focus-visible,
+.epir-assistant__send-btn:focus-visible,
+.epir-assistant__input:focus-visible {
+  outline: 2px solid var(--epir-accent-color);
+  outline-offset: 2px;
+}
+
+/* Reduced motion (accessibility) */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ==================================================
+   Compatibility layer for existing Liquid/JS markup
+   Maps .assistant-*, #assistant-*, and .msg classes
+   to the canonical .epir-* styles without editing JS
+================================================== */
+
+/* Root wrapper: map section to epir-assistant root */
+#epir-assistant-section.epir-assistant { display: block; }
+
+/* Container mapping */
+.assistant-container {
+  /* reuse chat-box styles */
+  background: #fff;
+  border-radius: var(--epir-border-radius);
+  box-shadow: var(--epir-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: var(--epir-transition);
+  max-width: 640px;
+  margin: 2rem auto;
+}
+
+/* Header mapping */
+.assistant-header {
+  background: linear-gradient(135deg, var(--epir-primary-color) 0%, #333 100%);
+  color: #fff;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 2px solid var(--epir-accent-color);
+}
+
+.assistant-header h3 { margin: 0; font-size: 16px; font-weight: 600; }
+
+/* Toggle button mapping */
+#assistant-toggle-button {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+/* Content / messages mapping */
+.assistant-content {
+  padding: 0;
+  background: transparent;
+}
+
+.assistant-messages {
+  display: block;
+  padding: 16px;
+  background: linear-gradient(to bottom, #fafafa 0%, #fff 100%);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+/* Map legacy .msg classes to message bubble styles */
+.msg {
+  display: flex;
+  margin-bottom: 12px;
+}
+
+.msg-user { justify-content: flex-end; }
+.msg-assistant { justify-content: flex-start; }
+
+.msg .epir-message__bubble,
+.msg .bubble,
+.msg { /* fallback when bubble wrapper missing */
+  max-width: 75%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  word-wrap: break-word;
+}
+
+.msg-user { color: #fff; }
+.msg-user {
+  background: linear-gradient(135deg, var(--epir-accent-color) 0%, #c49a2e 100%);
+  color: #fff;
+  align-self: flex-end;
+}
+
+.msg-assistant {
+  background: #f5f5f5;
+  color: var(--epir-primary-color);
+  border: 1px solid rgba(0,0,0,0.06);
+  align-self: flex-start;
+}
+
+/* Typing state */
+.msg-typing { opacity: 0.95; }
+
+/* Form mapping */
+.assistant-form {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  background: #fff;
+  border-top: 1px solid rgba(0,0,0,0.08);
+}
+
+#assistant-input, .assistant-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 24px;
+  font-size: 14px;
+}
+
+#assistant-send-button, .assistant-send-btn {
+  background: linear-gradient(135deg, var(--epir-accent-color) 0%, #c49a2e 100%);
+  color: #fff;
+  border: none;
+  width: 84px;
+  padding: 8px 12px;
+  border-radius: 24px;
+  cursor: pointer;
+}
+
+.assistant-status { padding: 8px 12px; color: var(--epir-primary-color); }
+
+/* Small responsive tweak to avoid footer overlap on long pages */
+@media (min-width: 800px) {
+  .assistant-container { position: fixed; right: 24px; bottom: 24px; width: 380px; max-width: calc(100vw - 48px); height: auto; z-index: 9999; }
+  .assistant-messages { max-height: 56vh; }
+}
+
+/* Open / closed states and transitions */
+.epir-assistant--closed .assistant-container,
+.assistant-content.is-closed {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px) scale(0.98);
+  pointer-events: none;
+}
+
+.assistant-toggle-open .assistant-container,
+.assistant-content:not(.is-closed) {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
