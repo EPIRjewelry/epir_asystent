@@ -1,0 +1,19 @@
+name = "epir-ai-worker"
+main = "src/index.ts"
+compatibility_date = "2025-09-30"
+compatibility_flags = ["nodejs_compat"]
+
+# AI Worker jest prostym serwisem - nie potrzebuje Durable Objects, D1, KV ani Vectorize
+# Wymaga tylko GROQ_API_KEY jako secret
+
+# Opcjonalne: ceny dla logowania kosztów (jeśli dostępne)
+[vars]
+# GROQ_PRICE_INPUT_PER_M = 0.20
+# GROQ_PRICE_OUTPUT_PER_M = 0.30
+
+[observability]
+enabled = true
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true

@@ -1,0 +1,20 @@
+{
+  "name": "epir-ai-worker",
+  "version": "1.0.0",
+  "description": "Reusable AI Worker for EPIR - handles Groq API calls with Service Binding pattern",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest"
+  },
+  "keywords": ["cloudflare-workers", "groq", "ai", "service-binding"],
+  "author": "EPIRjewelry",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.95.0",
+    "vitest": "^1.0.4"
+  }
+}

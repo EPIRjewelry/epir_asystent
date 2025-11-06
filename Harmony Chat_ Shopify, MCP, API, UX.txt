@@ -1,0 +1,334 @@
+﻿Architektoniczna Specyfikacja Integracji Modelu openai/gpt-oss-120b (MoE) z Ekosystemem Shopify
+
+
+Niniejszy raport techniczny przedstawia szczegółowe wytyczne dla inżynierii i wdrożenia zaawansowanego modelu openai/gpt-oss-120b, opartego na architekturze Mixture-of-Experts (MoE), w ramach platformy e-commerce Shopify. Integracja ta wymaga precyzyjnego zarządzania architekturą agenta, optymalizacją kosztów poprzez buforowanie kontekstu, rygorystycznymi protokołami bezpieczeństwa API oraz dostosowaniem do specyficznych narzędzi Shopify Merchant Component Platform (MCP).
+
+
+I. Strategiczne Podstawy: Architektura MoE i Kontekst Shopify
+
+
+Pomyślna integracja wymaga głębokiego zrozumienia architektonicznych właściwości modelu gpt-oss-120b i ich wpływu na wydajność operacyjną.
+
+
+1.1. Przegląd Architektury MoE gpt-oss-120b: Charakterystyka i Ograniczenia
+
+
+Model gpt-oss-120b jest zaawansowanym transformerem, który wykorzystuje architekturę Mixture-of-Experts (MoE) w celu optymalizacji wydajności i kosztów wnioskowania.1 Jest to kluczowe dla środowiska Shopify o wysokiej przepustowości.
+Model posiada 117 miliardów całkowitych parametrów, ale dzięki MoE aktywuje tylko 5.1 miliarda aktywnych parametrów na token.1 Ta dynamiczna aktywacja (wybierająca 4 ekspertów z puli 128) pozwala na osiągnięcie wydajności porównywalnej z gęstymi modelami o podobnej wielkości, ale przy znacznie niższych kosztach wnioskowania.1
+Istotną cechą jest natywna obsługa długości kontekstu do 128 tysięcy tokenów.1 W kontekście Shopify, ta pojemność jest niezbędna do obsługi złożonych zadań agenta, takich jak przeglądanie długiej historii interakcji klienta, analiza obszernego katalogu produktów, lub inkorporacja dużych dokumentów RAG (Retrieval-Augmented Generation) w celu ugruntowania odpowiedzi.2 Model został również dostosowany w procesie post-treningu do stosowania rozumowania CoT (Chain-of-Thought) oraz wykorzystywania narzędzi, co jest podstawą dla budowy agentów decyzyjnych.1
+
+
+1.2. Kompromisy Trybów Rozumowania MoE
+
+
+Model gpt-oss-120b obsługuje trzy dyskretne poziomy rozumowania: Niski, Średni i Wysoki.1 Ta funkcjonalność pozwala inżynierom na dostosowanie wysiłku obliczeniowego modelu do złożoności zadania.
+Wybór wyższego trybu rozumowania (np. Wysoki) skutkuje generowaniem dłuższych ciągów rozumowania (CoT), co empirycznie zapewnia wyższą dokładność w przypadku skomplikowanych problemów.3 Taki mechanizm jest szczególnie wartościowy w zadaniach wymagających wieloetapowych rozwiązań, takich jak debugowanie kodu czy rozwiązywanie skomplikowanych problemów logicznych lub matematycznych.4
+Należy jednak zauważyć, że dłuższe generowanie CoT wiąże się ze znacznym wzrostem kosztów obliczeniowych i opóźnienia odpowiedzi (latency).3 Analiza zależności między dokładnością a kosztem w MoE wykazuje zwroty log-liniowe.3 Oznacza to, że po pewnym punkcie, wzrost nakładów na dłuższe rozumowanie przynosi malejące korzyści w zakresie poprawy dokładności.
+Wymaga to, aby warstwa agenta implementowała mechanizm dynamicznego wyboru trybu rozumowania. Dla prostych, powtarzalnych zadań o dużej objętości (np. generowanie powitania klienta, prosta ekstrakcja atrybutów), preferowany jest tryb Niski w celu minimalizacji kosztów i opóźnień. Tryb Wysoki powinien być zarezerwowany wyłącznie dla asynchronicznych lub krytycznych operacji o wysokiej wartości, takich jak diagnostyka błędów w Liquid theme za pomocą narzędzi MCP lub rozwiązywanie problemów prognozowania zapasów. Architektura musi zatem zawierać warstwę klasyfikacji zadań, która przed wywołaniem modelu określa optymalny poziom wysiłku.
+
+
+1.3. Architektura Agenta LLM dla E-commerce
+
+
+Model gpt-oss-120b pełni rolę głównego kontrolera w architekturze Agenta LLM opartej na RAG.5
+Standardowa architektura musi składać się z trzech warstw: Warstwy LLM (gpt-oss-120b), Warstwy Agenta (Controller/Planner) oraz Warstwy Pobierania Danych (Baza Wektorowa dla RAG).5 Funkcje Warstwy Agenta są krytyczne; odpowiada ona za zarządzanie historią czatu, podejmowanie decyzji o tym, które dokumenty należy pobrać z RAG, oraz optymalizację użycia tokenów przed skierowaniem zapytania do LLM.5
+Zastosowanie RAG jest fundamentalne w handlu elektronicznym, ponieważ gwarantuje ugruntowanie odpowiedzi modelu w aktualnych i specyficznych dla domeny danych (np. aktualne ceny produktów, status zapasów, polityki zwrotów).2 Model LLM jest ograniczony przez dane, na których został wstępnie przeszkolony, co może prowadzić do nieaktualnych lub nieprawidłowych odpowiedzi.2 Ugruntowanie odpowiedzi za pomocą RAG redukuje ryzyko halucynacji – np. podania nieistniejących kodów rabatowych lub błędnych informacji produktowych.7 W ten sposób RAG łączy możliwości generatywne LLM z precyzją systemów wyszukiwania informacji.
+
+
+II. Inżynieria Promptów Harmony: Kontrola Zachowania Modelu
+
+
+Model gpt-oss-120b jest wytrenowany w oparciu o format odpowiedzi Harmony, który narzuca sztywną strukturę konwersacji i określa, jak narzędzia są definiowane i wykorzystywane.8
+
+
+2.1. Format Harmony: Role, Hierarchia i Kanały Intencji
+
+
+Format Harmony wykorzystuje specyficzne role w celu strukturyzowania komunikacji i rozwiązywania konfliktów instrukcji.8
+
+
+Hierarchia Ról
+
+
+Model przestrzega ustalonej hierarchii autorytetu w przypadku sprzecznych instrukcji: system > developer > user > assistant > tool.8
+* Rola system: Posiada najwyższy autorytet. Powinna być używana do definiowania niezmiennych barier ochronnych (guardrails), globalnego kontekstu (np. "Jesteś oficjalnym asystentem technicznym Shopify"), daty odcięcia wiedzy (knowledge cutoff) oraz, co najważniejsze, wbudowanych definicji narzędzi.8
+* Rola developer: Posiada średni autorytet. Służy do przekazywania dynamicznych instrukcji specyficznych dla zadania, takich jak zasady formatowania wyników, tymczasowe ograniczenia, lub włączanie/wyłączanie podzbiorów narzędzi dla danej sesji.8
+* Rola user: Standardowe zapytanie od użytkownika końcowego.8
+* Kanały Intencji: Wiadomości wyjściowe modelu (rola assistant) powinny być oznaczane kanałami celu. Kanał final jest przeznaczony dla użytkownika końcowego, podczas gdy kanały debug lub internal są używane do rejestrowania wewnętrznego rozumowania i planowania agenta.8
+
+
+2.2. Projektowanie Wiadomości system i developer pod Kątem Buforowania
+
+
+Skuteczność kosztowa wdrożenia MoE jest nierozerwalnie związana ze strukturą promptów. Zaawansowane buforowanie promptów (prompt caching) wymaga dokładnego dopasowania prefiksu statycznej treści.10
+Wiadomość w roli system jest z natury statyczna i ma najwyższy autorytet. Stanowi ona idealne miejsce dla wszystkich ciężkich, ale niezmiennych komponentów kontekstu. Przeniesienie obszernego kontekstu RAG (np. polityki zwrotów, taksonomia produktów 11) oraz pełnych definicji narzędzi MCP do wiadomości system i umieszczenie ich na początku promptu zapewnia, że większość zapytań będzie współdzielić ten sam, buforowalny prefiks.8
+Taka strategia minimalizuje wielkość dynamicznego komponentu (wiadomość user) oraz zmniejsza koszt tokenów wejściowych przy powtarzających się zapytaniach.12 Proces buforowania umożliwia załadowanie już przetworzonych stanów uwagi dla statycznego prefiksu, dzięki czemu model przetwarza tylko nowe lub zmienione części promptu.12
+
+
+2.3. Implementacja Kontroli Rozumowania CoT
+
+
+Model gpt-oss-120b jest wytrenowany do stosowania rozumowania CoT i użycia narzędzi przed sformułowaniem ostatecznej odpowiedzi.1 Ten wewnętrzny proces jest kluczowy dla złożonych decyzji, ale musi być zarządzany pod kątem kosztów.
+Należy wykorzystać wiadomości developer do narzucenia jawnych ograniczeń na maksymalną długość generowanego CoT (max_cot_tokens). Ta kontrola jest niezbędna do zapobiegania generowaniu niepotrzebnie długich sekwencji rozumowania w zadaniach o mniejszej złożoności, co bezpośrednio redukuje zużycie tokenów i opóźnienia.3 Ponadto, każda sekwencja rozumowania musi być rejestrowana w kanałach debug lub internal dla celów audytu i śledzenia zgodności.
+Tabela 1: Role Promptów Harmony i Hierarchia Autorytetu
+
+
+Rola
+	Cel w Kontekście Agenta E-commerce
+	Autorytet Instrukcji
+	Znaczenie dla Buforowania
+	system
+	Definicja niezmiennych reguł (guardrails), polityk RAG, pełne schematy narzędzi MCP.
+	Najwyższy (Unieważnia wszystkie inne) 8
+	Wysokie: Podstawowy element buforowalnego prefiksu.10
+	developer
+	Dynamiczne instrukcje zadań, kontrola formatu wyjściowego, ustawienia trybu rozumowania (np. Low/High).
+	Średni (Unieważnia Użytkownika/Asystenta) 8
+	Średnie: Używane do warunkowego grupowania buforowania.
+	user
+	Zapytanie użytkownika końcowego i dynamiczny kontekst klienta.
+	Niski (Podlega ograniczeniom System/Developer) 8
+	Niskie: Musi być minimalne i umieszczone na końcu.10
+	assistant
+	Wynik modelu, wywołanie narzędzia, ostateczna odpowiedź dla użytkownika.
+	Nie dotyczy
+	Nie dotyczy
+	
+
+III. Zarządzanie MCP i Projektowanie Funkcji Narzędziowych dla Platformy Shopify
+
+
+Shopify Merchant Component Platform (MCP) udostępnia specjalistyczne narzędzia do walidacji kodu, które są kluczowe dla agentów LLM generujących zasoby platformy. Narzędzia te muszą być precyzyjnie zdefiniowane w formacie Harmony.
+
+
+3.1. Zasady Definicji Narzędzi: Schemat JSON i Integracja Harmony
+
+
+Agent opiera się na definicjach narzędzi, aby niezawodnie generować wywołania funkcji.14
+Definicje te, w formacie JSON schema, muszą być zawarte w wiadomości system.9 Po wygenerowaniu przez LLM wywołania narzędzia, Warstwa Agenta jest zobowiązana do walidacji argumentów przed wykonaniem za pomocą mechanizmów, takich jak validateFunctionSignature, aby zapewnić bezpieczeństwo i poprawność.15 Rezultat wywołania narzędzia jest następnie zwracany do modelu w wiadomości z rolą tool.14
+
+
+3.2. Katalog Narzędzi MCP Shopify i Scenariusze Użycia
+
+
+Narzędzia MCP są zaprojektowane w celu minimalizacji halucynacji w złożonych kontekstach programistycznych Shopify.16
+
+
+Narzędzia Walidacji Kodu:
+
+
+* introspect_graphql_schema: Niezbędne, aby agent mógł dynamicznie odkrywać dostępne pola, zapytania i mutacje w schematach GraphQL Shopify, zanim spróbuje wygenerować kod API.17
+* validate_graphql_codeblocks: Służy do sprawdzania, czy wygenerowane bloki kodu GraphQL są zgodne ze schematem, co bezpośrednio zapobiega halucynacjom struktury API.17
+* validate_theme_codeblocks / validate_theme: Waliduje fragmenty Liquid, JSON, CSS lub całe katalogi tematyczne pod kątem błędów składniowych i prawidłowego odniesienia do komponentów.16 Należy pamiętać, że pełna walidacja motywu wymaga specyficznej konfiguracji serwera MCP (LIQUID_VALIDATION_MODE=partial).16
+* validate_component_codeblocks: Zapewnia, że generowane bloki kodu JavaScript/TypeScript używają wyłącznie prawidłowych komponentów i właściwości Shopify.16
+
+
+Narzędzia Akcji E-commerce:
+
+
+Muszą być zdefiniowane do wykonywania kluczowych operacji transakcyjnych (np. zarządzanie koszykiem, zamówieniami).18 W przypadkach takich jak dodawanie produktów do koszyka (add_item_to_cart), Warstwa Agenta musi być również zaprogramowana do obsługi złożonych scenariuszy, takich jak łączenie koszyków anonimowych z koszykami klienta po zalogowaniu (Cart Merge).19
+
+
+3.3. Amortyzacja Ukrytego Kosztu Kontekstu
+
+
+Włączenie szczegółowych definicji narzędzi do kontekstu promptu przy każdym wywołaniu LLM tworzy stały, ukryty koszt tokenów.17 W przypadku narzędzi MCP, które wymagają obszernych schematów walidacyjnych, koszt ten jest znaczący.
+Zarządzanie tym kosztem jest kluczowym wyzwaniem architektonicznym. Ponieważ narzędzia MCP są statyczne i niezbędne dla każdej operacji agenta, ich definicje są idealnym kandydatem do buforowania. Projekt architektoniczny musi celowo umieścić wszystkie definicje narzędzi w wiadomości system (zgodnie z sekcją II.2). Dzięki temu, koszt związany z kontekstem narzędziowym jest ponoszony tylko raz na określony czas życia pamięci podręcznej (TTL), a nie przy każdym wywołaniu, efektywnie amortyzując ten kontekstowy podatek.12 Dodatkowo, inżynierowie powinni dążyć do maksymalnej zwięzłości w opisach narzędzi w schemacie JSON, koncentrując się na nazwach funkcji i kluczowych parametrach.
+
+
+IV. Doskonałość Operacyjna i Optymalizacja Kosztów
+
+
+Ze względu na zaawansowaną architekturę MoE i wysoką objętość zapytań e-commerce, optymalizacja kosztów jest priorytetem.
+
+
+4.1. Zaawansowana Strategia Buforowania Promptów
+
+
+Buforowanie promptów może drastycznie obniżyć koszty tokenów wejściowych (do 90%) oraz opóźnienia odpowiedzi (do 80%).10
+Kluczowym wymogiem jest dokładne dopasowanie prefiksu.10 Wszelkie statyczne instrukcje, szablony, czy definicje narzędzi muszą być umieszczone na początku promptu, przed dynamicznymi elementami.20 W przypadku bardzo długich kontekstów, zaleca się wykorzystanie parametru prompt_cache_key. Ten klucz, łączony z hashem prefiksu, umożliwia jawne grupowanie podobnych zapytań, poprawiając współczynnik trafień w pamięci podręcznej (cache hit rates).10
+Należy pamiętać, że buforowana treść ma ograniczony czas życia (TTL), często wynoszący około 5 minut.12 Wdrożenie musi uwzględniać strategie "cache warming" (wstępne ładowanie najczęściej używanych promptów systemowych) w celu maksymalizacji wykorzystania pamięci podręcznej w okresach szczytowego ruchu e-commerce.
+
+
+4.2. Zarządzanie Kosztami MoE Poprzez Personalizację Aktywacji
+
+
+Architektura MoE umożliwia zaawansowaną optymalizację kosztów poprzez dynamiczne kierowanie zapytań do wyspecjalizowanych ekspertów, co jest szczególnie cenne w personalizowanych scenariuszach e-commerce.21
+Spersonalizowane systemy MoE wykorzystują reprezentację historycznej trajektorii użytkownika (historii zakupów, zachowania) w połączeniu z wejściowymi embeddingami promptu.21 Ta informacja jest wykorzystywana przez router do dynamicznego wyboru najbardziej relewantnych submodułów eksperckich. Przykładowo, zapytanie dotyczące rekomendacji może aktywować tylko ekspertów związanych z katalogiem produktów i preferencjami klienta.22
+Ten mechanizm elastycznie dostosowuje liczbę aktywnych ekspertów (w przeciwieństwie do stałej strategii top-k) i zmniejsza niepotrzebne obciążenie obliczeniowe.21 Aby zwiększyć pewność routingu i zminimalizować aktywację niepotrzebnych ekspertów, podczas treningu lub dostrajania modelu można wprowadzić termin regularyzacji entropii.21
+
+
+4.3. Ciągłe Monitorowanie Kosztów i Obserwowalność
+
+
+Dla pełnej kontroli kosztów i efektywności operacyjnej, niezbędny jest zaawansowany system monitorowania tokenów. Monitorowanie musi wykraczać poza standardowe liczniki tokenów wejściowych i wyjściowych.23
+Wymagane jest śledzenie zaawansowanych typów zużycia, w tym cached_tokens (tokenów obsłużonych przez pamięć podręczną), całkowitej liczby tokenów oraz kosztu w USD dla każdego typu użycia.23 Jeśli dostawca API zwraca szczegóły użycia i kosztów, dane te powinny być priorytetowo pobierane i ingestowane, ponieważ są najdokładniejsze.23 System obserwacji (np. Langfuse) musi umożliwiać agregację i filtrowanie metryk dziennych według użytkownika, aplikacji lub tagów, co pozwala na precyzyjną atrybucję kosztów do konkretnych funkcji e-commerce (np. generowanie opisu produktu vs. obsługa klienta).23
+Tabela 2: Dźwignie Optymalizacji Kosztów dla Integracji gpt-oss-120b
+
+
+Dźwignia Optymalizacji
+	Mechanizm
+	Warstwa Harmony
+	Wpływ na Koszt/Wydajność
+	Buforowanie Promptów (Wejście)
+	Dokładne dopasowanie prefiksu; użycie prompt_cache_key.10
+	Statyczna treść w wiadomości System i Developer.
+	Redukcja kosztów wejściowych do 90%; niższe opóźnienia.12
+	Aktywacja Ekspertów MoE
+	Routing oparty na personalizacji (historyczne embeddingi); regularyzacja entropii.21
+	Kontekst User podawany do routera MoE.
+	Zmniejsza narzut obliczeniowy (aktywne parametry na token).
+	Optymalizacja Danych RAG
+	Agresywne filtrowanie i wstępne przetwarzanie pobranych fragmentów (pre-processing).[13]
+	Warstwa Agenta przed sformułowaniem promptu User.
+	Minimalizuje całkowitą długość promptu i koszt wejściowy.
+	Optymalizacja Wyniku
+	Definiowanie ścisłych ograniczeń formatu wyjściowego (np. krótka lista, konkretny schemat JSON).[13]
+	Instrukcje w wiadomości Developer.
+	Redukuje liczbę tokenów wyjściowych i opóźnienie wnioskowania.
+	
+
+V. Bezpieczeństwo API, Odporność i Ugruntowanie Danych
+
+
+Integracja z Shopify API wymaga wdrożenia rygorystycznych protokołów autoryzacji, zarządzania limitami prędkości oraz zabezpieczeń przeciwko specyficznym lukom LLM.
+
+
+5.1. Kontrola Dostępu i Autoryzacja Shopify API
+
+
+Agent musi poprawnie zarządzać dwoma typami tokenów dostępu OAuth Shopify.24
+* Offline Access Tokens: Przeznaczone dla długotrwałych zadań po stronie serwera, niezwiązanych z sesją użytkownika (np. prognozowanie zapasów, analiza katalogu).
+* Online Access Tokens: Należy ich używać, gdy agent wykonuje działania w imieniu konkretnego, zalogowanego użytkownika (np. dostęp do historii zamówień klienta lub modyfikacja jego koszyka). Tokeny te są powiązane z sesją i wygasają po wylogowaniu użytkownika lub po 24 godzinach.25
+* Zarządzanie Uprawnieniami: Agent musi być przygotowany na obsługę odpowiedzi 403 Forbidden. Ponieważ tokeny online szanują indywidualne uprawnienia użytkownika, błąd 403 oznacza, że użytkownik nie ma wystarczających uprawnień do wykonania żądanej akcji.25 Wszelkie mechanizmy buforowania danych dla tokenów online muszą być ograniczone do zakresu danego użytkownika.25
+
+
+5.2. Zarządzanie Limitami Prędkości Shopify (Rate Limits)
+
+
+Shopify stosuje różne metody ograniczania prędkości dla swoich API: model kubełka tokenów dla REST oraz koszt zapytania dla GraphQL.26 Agent musi stosować podwójną strategię odporności.
+
+
+REST Admin API (Kubełek Tokenów)
+
+
+Limit jest określony przez wielkość kubełka (np. 40 żądań na aplikację/sklep) i szybkość wycieku (leak rate) (np. 2 żądania/sekundę dla planu Standard).26 Przekroczenie limitu skutkuje błędem HTTP 429 Too Many Requests.
+Strategia odporności musi polegać na wdrożeniu wykładniczego wycofywania i ponawiania prób (exponential backoff and retry).28 Alternatywnie, dla operacji krytycznych, można zastosować mechanizmy przerywania obwodu (circuit breaking) w architekturze, aby zapewnić obsługę eleganckich awarii i zarządzanie dystrybucją ruchu.28
+
+
+GraphQL Admin API (Kalkulacja Kosztu Zapytania)
+
+
+Tutaj limit opiera się na skalkulowanym koszcie złożoności zapytania (np. 1000 punktów na minutę).27 Koszt jest funkcją wybranych pól i głębokości relacji.30
+W tym przypadku, odporność nie może być tylko reaktywna; wymagana jest proaktywna optymalizacja. Agent, w fazie planowania narzędzi, musi oszacować koszt zapytania GraphQL przed jego wykonaniem. Istnieją przesłanki, że Shopify stosuje zmodyfikowaną kalkulację złożoności, gdzie koszty mogą być ważone funkcjami logarytmicznymi, np. $\log(\text{maksymalna liczba wybranych pól}) / \log(e^{0.5})$.30 Agent musi albo posiadać wewnętrzne heurystyki do przewidywania kosztu, albo aktywnie minimalizować złożoność zapytań poprzez ograniczenie selekcji pól i głębokości.30
+W związku z tym, moduł Wykonywania Narzędzi Agenta musi klasyfikować wywołania API (REST lub GraphQL) i stosować odpowiedni mechanizm kontroli prędkości: kalkulator kosztów dla GraphQL oraz backoff/retry dla REST.
+
+
+5.3. Bariery Ochronne LLM i Zapobieganie Wyciekom Danych
+
+
+Zdolność LLM do wykonywania poleceń poprzez wywołania narzędzi (funkcji) wprowadza poważne ryzyko bezpieczeństwa, w szczególności ataki typu Prompt Injection.17
+Aby temu przeciwdziałać, nie należy polegać wyłącznie na instrukcjach w promptach systemowych, ponieważ są one podatne na manipulację przez złośliwe prompt injection.32 Krytyczne kontrole bezpieczeństwa (sanityzacja danych wejściowych, sprawdzanie uprawnień, walidacja schematów) muszą być wymuszone niezależnie od LLM, w Warstwie Agenta.17
+Ponadto, należy bezwzględnie unikać osadzania jakichkolwiek wrażliwych danych, takich jak klucze API, dane uwierzytelniające lub tokeny użytkowników, bezpośrednio w promptach.32 Dane te muszą być zarządzane przez backend aplikacji i wstrzykiwane bezpośrednio do warstwy wykonawczej narzędzia.33 Wdrożenie systemu audytu rejestrującego wszystkie wywołania narzędzi i ich parametry jest niezbędne do wykrywania niezamierzonego lub złośliwego użycia.17
+
+
+VI. UX E-commerce i Ocena Wydajności
+
+
+Integracja MoE musi zapewniać wysoką jakość doświadczeń użytkownika (UX) w e-commerce i być poddawana rygorystycznej ocenie wydajności.
+
+
+6.1. Implementacja RAG dla Ugruntowania Faktu
+
+
+RAG jest kluczowym elementem zapewniającym, że model MoE dostarcza precyzyjne i aktualne informacje w dynamicznym środowisku handlu.2
+Mechanizm RAG działa poprzez pobranie odpowiednich danych zewnętrznych (np. bazy wiedzy, strony internetowe) przy użyciu algorytmów wyszukiwania. Pobrana informacja jest następnie wstępnie przetwarzana (tokenizacja, filtrowanie) i płynnie włączana do kontekstu LLM, ugruntowując jego generowane wyjście.2 To ugruntowanie jest szczególnie istotne, ponieważ pozwala agentowi na dostęp do świeżych informacji (np. zmieniające się ceny, nowe produkty), których nie posiada w swoim statycznym zestawie treningowym.7 Ugruntowane odpowiedzi są bardziej trafne i wiarygodne, co jest niezbędne dla zaufania klienta w e-commerce.2
+
+
+6.2. Projektowanie Spersonalizowanych Scenariuszy Agenta
+
+
+Zastosowanie agenta MoE w e-commerce powinno koncentrować się na scenariuszach o wysokiej wartości.34
+* Spersonalizowane Rekomendacje Produktowe: Agent analizuje zachowanie użytkownika i nawyki zakupowe, wykorzystując mechanizm personalizacji MoE (IV.2), aby proponować dostosowane produkty.22 Spersonalizowane rekomendacje mogą zwiększyć wskaźniki konwersji nawet o 49%.22
+* Optymalizacja Wyszukiwania Produktów: Wykorzystanie semantycznego rozumienia LLM do ulepszenia tradycyjnych metod wyszukiwania produktów.34
+* Automatyzacja Wsparcia Klienta: Rozwiązywanie większości zapytań klientów bez interwencji człowieka, co skraca czas reakcji i umożliwia agentom ludzkim skupienie się na złożonych przypadkach.35
+* Zarządzanie Autonomicznymi Kampaniami: Agent AI może być wykorzystywany do złożonego prognozowania zapasów, dynamicznego ustalania cen i zarządzania zaawansowanymi kampaniami retargetingowymi.34
+
+
+6.3. Ocena Wydajności Agenta w Scenariuszach E-commerce
+
+
+Ocena agentów LLM różni się od tradycyjnego testowania oprogramowania, ponieważ są one z natury probabilistyczne i dynamiczne.36
+Wymagane jest stosowanie nowoczesnych ram benchmarkingowych, takich jak ECom-Bench. Ramy te koncentrują się na realistycznych scenariuszach wsparcia klienta w e-commerce i symulacji użytkownika opartej na rzeczywistych dialogach, co zapewnia kompleksową ocenę.37
+Kluczowe metryki do śledzenia to:
+1. Współczynnik Halucynacji (Hallucination Rate): Mierzy skuteczność ugruntowania RAG.
+2. Koszt na Rozwiązane Zapytanie: Obejmuje szczegółową analizę zużycia tokenów, w tym kosztów amortyzowanych (buforowanych) i narzutów MoE.23
+3. Współczynnik Sukcesu Narzędzi: Procent poprawnie wykonanych, wieloetapowych zadań wymagających wywołania narzędzi MCP lub API transakcyjnych.37
+4. Opóźnienie Odpowiedzi (Latency): Krytyczne dla UX. Jest bezpośrednio skorelowane z długością CoT (trybem rozumowania) oraz współczynnikiem trafień w pamięci podręcznej.3
+Tabela 3: Kluczowe Metryki Oceny Agenta E-commerce
+
+
+Kategoria
+	Metryka
+	Znaczenie Operacyjne
+	Dokładność/Bezpieczeństwo
+	Współczynnik Halucynacji
+	Mierzy skuteczność ugruntowania i ryzyko podania fałszywych informacji.7
+	Wydajność/Koszt
+	Koszt na Rozwiązane Zapytanie
+	Uwzględnia tokeny buforowane i narzut MoE, odzwierciedlając efektywność kosztową.23
+	Realizacja Zadania
+	Współczynnik Sukcesu Użycia Narzędzi
+	Procent pomyślnych wywołań API i walidacji kodu MCP.37
+	UX/Przepustowość
+	Opóźnienie Odpowiedzi (Tail Latency)
+	Czas potrzebny na wygenerowanie końcowej odpowiedzi, kluczowy dla interakcji w czasie rzeczywistym.3
+	
+
+Podsumowanie i Rekomendacje
+
+
+Integracja modelu gpt-oss-120b z ekosystemem Shopify oferuje znaczące korzyści w zakresie wydajności i personalizacji, ale wymaga zdyscyplinowanego podejścia architektonicznego.
+Kluczowe wnioski techniczne koncentrują się na strategicznej inżynierii kontekstu:
+1. Amortyzacja Kosztów przez Caching Kontekstu Statycznego: Aby wykorzystać maksymalny potencjał buforowania promptów i zminimalizować koszty tokenów wejściowych (szczególnie narzut związany z dużym kontekstem narzędziowym MCP), architekci muszą front-loadować wszelkie statyczne definicje (schematy narzędzi i polityki RAG) w najwyżej autorytatywnej wiadomości Harmony – system. Zapewnia to, że największy, najdroższy fragment promptu jest przetwarzany tylko raz na cykl życia pamięci podręcznej.10
+2. Dynamiczna Kontrola Obciążenia MoE: Konieczne jest zaimplementowanie warstwy Agent-Controller, która dynamicznie dostosowuje tryb rozumowania (Niski, Średni, Wysoki) w oparciu o złożoność i krytyczność zadania. Taka kontrola jest niezbędna do zarządzania kompromisem między dokładnością a kosztem operacyjnym, unikając nieuzasadnionego generowania długich ciągów rozumowania (CoT) w prostych zapytaniach.3 Dodatkowo, wykorzystanie embeddingów historycznych klientów do kierowania ekspertów MoE umożliwia bardziej efektywną personalizację i redukcję niepotrzebnej aktywacji submodułów.21
+3. Podwójna Strategia Odporności API: Ze względu na odmienne mechanizmy limitów prędkości Shopify (Token Bucket dla REST i Query Cost dla GraphQL), agent musi być wyposażony w dwie oddzielne rutyny odporności: proaktywny kalkulator kosztów dla GraphQL i reaktywny mechanizm wykładniczego wycofywania (backoff) dla REST.
+4. Bezpieczeństwo Niezależne od LLM: Zabezpieczenia (sanityzacja, kontrola uprawnień) muszą być egzekwowane w Warstwie Agenta, a nie wyłącznie w promptach systemowych, minimalizując podatność na ataki Prompt Injection i zapewniając bezpieczną obsługę tokenów dostępu (online/offline).17
+Cytowane prace
+1. Introducing gpt-oss - OpenAI, otwierano: października 28, 2025, https://openai.com/index/introducing-gpt-oss/
+2. What is Retrieval-Augmented Generation (RAG)? - Google Cloud, otwierano: października 28, 2025, https://cloud.google.com/use-cases/retrieval-augmented-generation
+3. gpt-oss-120b & gpt-oss-20b Model Card - arXiv, otwierano: października 28, 2025, https://arxiv.org/html/2508.10925v1
+4. Understanding Reasoning LLMs: Methods and Strategies for Building and Refining Reasoning Models-Arghya Mukherjee - Medium, otwierano: października 28, 2025, https://medium.com/@arghya05/understanding-reasoning-llms-methods-and-strategies-for-building-and-refining-reasoning-models-d851adcf4cd7
+5. AI Agents in RAG Chatbots: Role and implementations - Webkul Blog, otwierano: października 28, 2025, https://webkul.com/blog/ai-agents-in-rag-chatbot/
+6. LLM Agents - Prompt Engineering Guide, otwierano: października 28, 2025, https://www.promptingguide.ai/research/llm-agents
+7. What is Retrieval Augmented Generation (RAG)? | Databricks, otwierano: października 28, 2025, https://www.databricks.com/glossary/retrieval-augmented-generation-rag
+8. OpenAI Harmony Response Format, otwierano: października 28, 2025, https://cookbook.openai.com/articles/openai-harmony
+9. gpt-oss-120b and gpt-oss-20b are two open-weight language models by OpenAI - GitHub, otwierano: października 28, 2025, https://github.com/openai/gpt-oss
+10. Prompt caching - OpenAI API, otwierano: października 28, 2025, https://platform.openai.com/docs/guides/prompt-caching
+11. Leveraging multimodal LLMs for Shopify's global catalogue: Recap of expo talk at ICLR 2025, otwierano: października 28, 2025, https://shopify.engineering/leveraging-multimodal-llms
+12. Prompt Caching: The Secret to 60% Cost Reduction in LLM Applications - Medium, otwierano: października 28, 2025, https://medium.com/tr-labs-ml-engineering-blog/prompt-caching-the-secret-to-60-cost-reduction-in-llm-applications-6c792a0ac29b
+13. How to Reduce LLM Costs: 10 Proven Strategies for Budget-Friendly AI - Uptech, otwierano: października 28, 2025, https://www.uptech.team/blog/how-to-reduce-llm-costs
+14. Function Calling with LLMs - Prompt Engineering Guide, otwierano: października 28, 2025, https://www.promptingguide.ai/applications/function_calling
+15. moe-mizrak/laravel-prompt-alchemist - GitHub, otwierano: października 28, 2025, https://github.com/moe-mizrak/laravel-prompt-alchemist
+16. Shopify Dev MCP server, otwierano: października 28, 2025, https://shopify.dev/docs/apps/build/devmcp
+17. A Comprehensive Guide to Shopify MCP Servers for AI Engineers, otwierano: października 28, 2025, https://skywork.ai/skypage/en/A-Comprehensive-Guide-to-Shopify-MCP-Servers-for-AI-Engineers/1972171834867810304
+18. Triggering using Cart API - ServiceNow Community, otwierano: października 28, 2025, https://www.servicenow.com/community/developer-forum/triggering-using-cart-api/td-p/2447485
+19. Carts and Orders overview | HTTP API | commercetools Composable Commerce, otwierano: października 28, 2025, https://docs.commercetools.com/api/carts-orders-overview
+20. Optimizing LLM Costs: A Comprehensive Analysis of Context Caching Strategies - Phase 2, otwierano: października 28, 2025, https://phase2online.com/2025/04/28/optimizing-llm-costs-with-context-caching/
+21. Mixture-of-Experts for Personalized and Semantic-Aware Next Location Prediction - arXiv, otwierano: października 28, 2025, https://arxiv.org/pdf/2505.24597
+22. Building AI Agents: Tools, Frameworks, and Best Practices for Developers, otwierano: października 28, 2025, https://www.tekrevol.com/blogs/building-ai-agents-tools-frameworks-and-best-practices-for-developers/
+23. Model Usage & Cost Tracking for LLM applications (open source) - Langfuse, otwierano: października 28, 2025, https://langfuse.com/docs/observability/features/token-and-cost-tracking
+24. Implement authorization code grant manually - Shopify Dev Docs, otwierano: października 28, 2025, https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/authorization-code-grant
+25. About online access tokens - Shopify Dev Docs, otwierano: października 28, 2025, https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/online-access-tokens
+26. REST Admin API rate limits - Shopify Dev Docs, otwierano: października 28, 2025, https://shopify.dev/docs/api/admin-rest/usage/rate-limits
+27. Shopify API limits, otwierano: października 28, 2025, https://shopify.dev/docs/api/usage/limits
+28. Learn how to handle 429 resource exhaustion errors in your LLMs | Google Cloud Blog, otwierano: października 28, 2025, https://cloud.google.com/blog/products/ai-machine-learning/learn-how-to-handle-429-resource-exhaustion-errors-in-your-llms
+29. OpenAI API giving error: 429 Too Many Requests [duplicate] - Stack Overflow, otwierano: października 28, 2025, https://stackoverflow.com/questions/75041580/openai-api-giving-error-429-too-many-requests
+30. How to calculate GraphQL cost estimates - Shopify Developer Community Forums, otwierano: października 28, 2025, https://community.shopify.dev/t/how-to-calculate-graphql-cost-estimates/24364
+31. Canges in costs of requests to the GraphQL Admin API - Shopify Community, otwierano: października 28, 2025, https://community.shopify.com/t/canges-in-costs-of-requests-to-the-graphql-admin-api/304282
+32. LLM07:2025 System Prompt Leakage - OWASP Gen AI Security Project, otwierano: października 28, 2025, https://genai.owasp.org/llmrisk/llm072025-system-prompt-leakage/
+33. Enterprise LLM Security: Risks, Frameworks, & Best Practices - Superblocks, otwierano: października 28, 2025, https://www.superblocks.com/blog/enterprise-llm-security
+34. 17 Proven LLM Use Cases in E-commerce That Boost Sales in 2025 - Netguru, otwierano: października 28, 2025, https://www.netguru.com/blog/llm-use-cases-in-e-commerce
+35. A Guide to the Best LLMs for RAG Implementations - BotPenguin, otwierano: października 28, 2025, https://botpenguin.com/blogs/guide-to-the-best-llms-for-rag-implementations
+36. Evaluation and Benchmarking of LLM Agents: A Survey - arXiv, otwierano: października 28, 2025, https://arxiv.org/html/2507.21504v1
+37. ECom-Bench: Can LLM Agent Resolve Real-World E-commerce Customer Support Issues?, otwierano: października 28, 2025, https://arxiv.org/html/2507.05639v1

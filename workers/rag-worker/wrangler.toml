@@ -1,0 +1,34 @@
+name = "epir-rag-worker"
+main = "src/index.ts"
+compatibility_date = "2025-09-30"
+compatibility_flags = ["nodejs_compat"]
+
+# RAG Worker potrzebuje:
+# - Vectorize (dla FAQ/policies similarity search)
+# - AI (dla embeddings)
+# - D1 (opcjonalnie dla cache)
+
+[[vectorize]]
+binding = "VECTOR_INDEX"
+index_name = "autorag-epir-chatbot-rag"
+
+# AI binding for embeddings
+[ai]
+binding = "AI"
+
+# D1 database for caching (opcjonalne)
+[[d1_databases]]
+binding = "DB"
+database_name = "epir_art_jewellery"
+database_id = "6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23"
+
+[observability]
+enabled = true
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+[vars]
+SHOP_DOMAIN = "epir-art-silver-jewellery.myshopify.com"
+CANONICAL_MCP_URL = "https://epir-art-silver-jewellery.myshopify.com/api/mcp"

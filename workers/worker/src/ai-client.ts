@@ -6,6 +6,8 @@
  * NIE zawiera logiki biznesowej, budowania promptów ani promptów systemowych.
  */
 
+import { GROQ_MODEL_ID, MODEL_PARAMS, GROQ_API_URL } from './config/model-params';
+
 export type GroqMessage = { 
   role: 'system' | 'user' | 'assistant' | 'tool'; 
   content: string;
@@ -43,28 +45,6 @@ interface GroqPayload {
   stream_options?: { include_usage?: boolean };
 }
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-
-/**
- * ⚠️ CRITICAL: Model ID is HARDCODED and MUST NOT be changed without authorization.
- * 
- * This model (openai/gpt-oss-120b) is specifically chosen and configured for:
- * - MoE (Mixture-of-Experts) architecture with 120B parameters
- * - Harmony response format support
- * - Chain-of-Thought reasoning capabilities
- * - Optimized cost/performance ratio via Groq's LPU infrastructure
- * 
- * System prompts, instruction formats, and business logic are designed for THIS model.
- * Changing this value will break the system.
- * 
- * @see Documentation: /HARMONY_COT_MCP_IMPLEMENTATION.md
- * @constant
- */
-export const GROQ_MODEL_ID = 'openai/gpt-oss-120b' as const;
-
-// Compile-time verification that GROQ_MODEL_ID is not accidentally changed
-const _MODEL_VERIFICATION: 'openai/gpt-oss-120b' = GROQ_MODEL_ID;
-
 /**
  * Wykonuje streamingowe zapytanie do Groq i zwraca ReadableStream z tekstem.
  * @param messages - Tablica wiadomości (system, user, assistant).
@@ -83,10 +63,10 @@ export async function streamGroqResponse(
     model: GROQ_MODEL_ID,
     messages,
     stream: true,
-    temperature: 0.5,
-    max_tokens: 3000,
-    top_p: 0.9,
-    stream_options: { include_usage: true },
+    temperature: MODEL_PARAMS.temperature,
+    max_tokens: MODEL_PARAMS.max_tokens,
+    top_p: MODEL_PARAMS.top_p,
+    stream_options: MODEL_PARAMS.stream_options,
   };
 
   const res = await fetch(GROQ_API_URL, {
@@ -296,10 +276,10 @@ export async function streamGroqHarmonyEvents(
     model: GROQ_MODEL_ID,
     messages,
     stream: true,
-    temperature: 0.5,
-    max_tokens: 3000,
-    top_p: 0.9,
-    stream_options: { include_usage: true },
+    temperature: MODEL_PARAMS.temperature,
+    max_tokens: MODEL_PARAMS.max_tokens,
+    top_p: MODEL_PARAMS.top_p,
+    stream_options: MODEL_PARAMS.stream_options,
   };
 
   const res = await fetch(GROQ_API_URL, {
@@ -342,9 +322,9 @@ export async function getGroqResponse(
     model: GROQ_MODEL_ID,
     messages,
     stream: false,
-    temperature: 0.5,
-    max_tokens: 3000,
-    top_p: 0.9,
+    temperature: MODEL_PARAMS.temperature,
+    max_tokens: MODEL_PARAMS.max_tokens,
+    top_p: MODEL_PARAMS.top_p,
   };
 
   const res = await fetch(GROQ_API_URL, {

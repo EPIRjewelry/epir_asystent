@@ -137,7 +137,7 @@ import {
   type VectorizeIndex
 } from './rag';
 import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt';
-import { GROQ_MODEL_ID, streamGroqHarmonyEvents, getGroqResponse, streamGroqResponse } from './ai-client';
+import { GROQ_MODEL_ID, streamGroqHarmonyEvents, getGroqResponse, streamGroqResponse } from './ai-client-wrapper';
 import { getAdminExecutionQueue } from './admin-queue';
 import { validateFunctionSignature } from './mcp_tools';
 // Usunięto nieistniejący import engineer_prompt
@@ -201,6 +201,10 @@ export interface Env {
   WORKER_ORIGIN?: string;
   // Service binding to analytics worker (optional in tests)
   ANALYTICS?: Fetcher;
+  // Service binding to AI worker (reusable Groq client)
+  AI_WORKER?: Fetcher;
+  // Service binding to RAG worker (reusable RAG orchestrator)
+  RAG_WORKER?: Fetcher;
 }
 
 const RATE_LIMIT_WINDOW_MS = 60_000;

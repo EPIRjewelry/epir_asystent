@@ -53,6 +53,16 @@ binding = "AI"
 binding = "ANALYTICS"
 service = "epir-analityc-worker"
 
+# Service binding to AI worker (reusable Groq client)
+[[services]]
+binding = "AI_WORKER"
+service = "epir-ai-worker"
+
+# Service binding to RAG worker (reusable RAG orchestrator)
+[[services]]
+binding = "RAG_WORKER"
+service = "epir-rag-worker"
+
 # Routes - subdomena dla Workera
 [[routes]]
 pattern = "asystent.epirbizuteria.pl/*"
