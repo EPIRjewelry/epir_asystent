@@ -39,7 +39,10 @@ interface Env {
 /**
  * Re-export types from rag.ts for backward compatibility
  */
-export type { VectorizeIndex, RagResultItem, RagSearchResult } from './rag';
+export type { RagResultItem, RagSearchResult } from './rag';
+
+// VectorizeIndex type alias (use 'any' to match rag.ts signature)
+export type VectorizeIndex = any;
 
 /**
  * Check if RAG_WORKER Service Binding is available
@@ -196,16 +199,32 @@ export async function searchShopPoliciesAndFaqsWithMCP(
  * @param vectorIndex - Vectorize index
  * @param aiBinding - Cloudflare AI binding
  * @param topK - Number of results
- * @returns Formatted FAQ context string
+ * @returns RagSearchResult object
  */
 export async function searchShopPoliciesAndFaqs(
   query: string,
-  vectorIndex: VectorizeIndex,
-  aiBinding: any,
-  topK?: number
-): Promise<string | false> {
+  vectorIndex?: VectorizeIndex,
+  aiBinding?: any,
+  topK: number = 3
+): Promise<LocalRAG.RagSearchResult> {
   console.log('[RAG Wrapper] Using local rag.ts for legacy FAQ search (Vectorize-only)');
-  return LocalRAG.searchShopPoliciesAndFaqs(query, vectorIndex, aiBinding, topK);
+  const result = await LocalRAG.searchShopPoliciesAndFaqs(query, vectorIndex, aiBinding, topK);
+  
+  // If result is already RagSearchResult, return it
+  if (result && typeof result === 'object' && 'results' in result) {
+    return result as LocalRAG.RagSearchResult;
+  }
+  
+  // Otherwise, wrap in RagSearchResult format
+  return {
+    query,
+    results: result ? [{
+      id: 'legacy_faq',
+      text: typeof result === 'string' ? result : JSON.stringify(result),
+      snippet: '',
+      source: 'vectorize' as const,
+    }] : [],
+  };
 }
 
 /**

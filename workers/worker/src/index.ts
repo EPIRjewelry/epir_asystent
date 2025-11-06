@@ -135,7 +135,7 @@ import {
   searchProductCatalogWithMCP,
   formatRagContextForPrompt,
   type VectorizeIndex
-} from './rag';
+} from './rag-client-wrapper';
 import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt';
 import { GROQ_MODEL_ID, streamGroqHarmonyEvents, getGroqResponse, streamGroqResponse } from './ai-client-wrapper';
 import { getAdminExecutionQueue } from './admin-queue';
