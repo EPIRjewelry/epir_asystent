@@ -3,7 +3,7 @@
  * Exports functions that return a consistent { ok: boolean, result?, error? } shape
  * so callers can handle errors without try/catch if desired.
  */
-import type { RagResultItem } from '../rag';
+import type { RagResultItem } from '../rag-client-wrapper';
 
 export async function embedTextSafe(env: any, text: string): Promise<{ ok: true; vector: Float32Array } | { ok: false; error: string }> {
   try {
