@@ -255,7 +255,7 @@ export default {
       );
 
     } catch (error: any) {
-      console.error('[RAG Worker] ❌ Unhandled error:', error);
+      console.error('[RAG_WORKER] ❌ Unhandled error:', error);
 
       return new Response(
         JSON.stringify({

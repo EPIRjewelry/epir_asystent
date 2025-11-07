@@ -12,9 +12,17 @@ binding = "DB"
 database_name = "epir_art_jewellery"
 database_id = "6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23"
 
+# Durable Object binding for Session tracking
+[[durable_objects.bindings]]
+name = "SESSION_DO"
+class_name = "SessionDO"
+script_name = "epir-art-jewellery-worker"
+
 [observability]
 enabled = true
 [observability.logs]
 enabled = true
 head_sampling_rate = 1
 invocation_logs = true
+# Log filter: Only logs from THIS worker (epir-analityc-worker)
+# Use filter in Cloudflare dashboard: ScriptName == "epir-analityc-worker"

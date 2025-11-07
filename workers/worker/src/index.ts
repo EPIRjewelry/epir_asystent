@@ -509,6 +509,16 @@ export class SessionDO {
       });
     }
 
+    if (method === 'POST' && pathname.endsWith('/track-product-view')) {
+      const payload = await request.json().catch(() => null);
+      const p = payload as { product_id?: string; product_type?: string; product_title?: string; duration?: number } | null;
+      if (!p || typeof p.product_id !== 'string') {
+        return new Response('Bad Request: product_id required', { status: 400 });
+      }
+      await this.trackProductView(p.product_id, p.product_type, p.product_title, p.duration || 0);
+      return new Response('ok');
+    }
+
     return new Response('Not Found', { status: 404 });
   }
 
@@ -568,6 +578,41 @@ export class SessionDO {
     
     console.log(`[SessionDO] 🛒 Cart action logged: ${action}`, details);
   }
+
+  private async trackProductView(
+    productId: string,
+    productType?: string,
+    productTitle?: string,
+    duration?: number
+  ): Promise<void> {
+    // Track product view in DO storage (Shopify Web Pixels integration)
+    const productView = {
+      product_id: productId,
+      product_type: productType || null,
+      product_title: productTitle || null,
+      duration: duration || 0,
+      timestamp: now(),
+      session_id: this.sessionId
+    };
+    
+    // Store last product view
+    await this.state.storage.put('last_product_view', productView);
+    
+    // Maintain product view history (last 10 views)
+    const productViews = await this.state.storage.get<Array<any>>('product_views') || [];
+    productViews.push(productView);
+    const trimmedViews = productViews.slice(-10);
+    await this.state.storage.put('product_views', trimmedViews);
+    
+    console.log(`[SessionDO] 👁️ Product view tracked: ${productId} (${duration}s)`, productType);
+    
+    // FUTURE: Proactive trigger logic
+    // if (duration > 10) {
+    //   // Call Chat Worker via Service Binding
+    //   await this.env.CHAT_WORKER.activateProactive({ sessionId: this.sessionId, productId });
+    // }
+  }
+
 
   private async end(sessionId: string): Promise<void> {
     if (this.history.length === 0) {
@@ -742,71 +787,61 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   const isOrderIntent = /zamówienie|status zamówienia|order|tracking/.test(lowerMsg);
   const isProductIntent = /produkt|pierścionek|naszyjnik|kolczyki|bransoletka|biżuteria|szukam|pokaż|product|ring|necklace|earring|bracelet|jewelry/.test(lowerMsg);
   
-  // PRIMARY: MCP for products, cart, orders (skip for conversational queries)
-  if (env.SHOP_DOMAIN && !isConversational) {
-    console.log('[handleChat] 🔍 MCP: Detected intent - searching products/cart/orders...');
-    const { searchProductsAndCartWithMCP } = await import('./rag');
+  // ============================================================================
+  // MICROSERVICE ARCHITECTURE: Chat Worker → RAG Worker (Service Binding)
+  // ============================================================================
+  // RAG Worker orchestrates: MCP (primary) → Vectorize (fallback)
+  // This follows Cloudflare Best Practices for Service Bindings
+  // @see https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/
+  // ============================================================================
+  
+  if (!isConversational && env.RAG_WORKER) {
+    console.log('[handleChat] 🔍 RAG_WORKER: Delegating context building...');
     
-    let intent: 'search' | 'cart' | 'order' | undefined;
+    // Detect intent (search, cart, order, faq)
+    let intent: 'search' | 'cart' | 'order' | 'faq' | null = null;
     if (isCartIntent) intent = 'cart';
     else if (isOrderIntent) intent = 'order';
     else if (isProductIntent || isFollowUp) intent = 'search';
+    else intent = 'faq'; // Default for non-product queries
     
-    console.log('[handleChat] 🎯 MCP Intent:', intent || 'NONE');
+    console.log('[handleChat] 🎯 Detected Intent:', intent);
     
     // Use entity from history for follow-up queries
     const searchQuery = entityFromHistory || payload.message;
-    console.log('[handleChat] 🔎 MCP Search Query:', searchQuery);
+    console.log('[handleChat] 🔎 Search Query:', searchQuery);
     
-    const mcpResult = await searchProductsAndCartWithMCP(
-      searchQuery,
-      env.SHOP_DOMAIN,
-      env,
-      cartId,
-      intent,
-      env.VECTOR_INDEX
-    );
-    
-    if (mcpResult) {
-      ragContext = mcpResult;
-      console.log('[handleChat] ✅ MCP: Got context, length:', mcpResult.length, 'chars');
-    } else {
-      console.log('[handleChat] ⚠️ MCP: No context returned');
+    try {
+      // Call RAG Worker via Service Binding (zero-cost RPC)
+      const ragResponse = await env.RAG_WORKER.fetch('https://rag-worker/context/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: searchQuery,
+          intent: intent,
+          cartId: cartId || null,
+          topK: 3
+        })
+      });
+      
+      if (ragResponse.ok) {
+        const ragData = await ragResponse.json() as { query: string; intent: string; context: string; hasHighConfidence: boolean };
+        ragContext = ragData.context || '';
+        console.log('[handleChat] ✅ RAG_WORKER: Got context, length:', ragContext.length, 'chars');
+        console.log('[handleChat] � RAG_WORKER: Intent confirmed:', ragData.intent);
+      } else {
+        const errorText = await ragResponse.text().catch(() => '<no body>');
+        console.error('[handleChat] ❌ RAG_WORKER: HTTP', ragResponse.status, errorText);
+      }
+    } catch (ragError: any) {
+      console.error('[handleChat] ❌ RAG_WORKER: Failed to call service binding:', ragError?.message || ragError);
+      // Don't throw - continue with empty context
     }
   } else {
-    console.log('[handleChat] ⏭️ MCP: Skipped (conversational query or no shop domain)');
-  }
-  
-  // FALLBACK: Vectorize for FAQ/policies (if no product/cart/order context found)
-  if (!ragContext || ragContext.trim().length === 0) {
-    console.log('[handleChat] 📚 RAG: Searching Vectorize for FAQ/policies...');
-    if (env.SHOP_DOMAIN) {
-      // Use MCP with Vectorize fallback for policies
-      const ragResult = await searchShopPoliciesAndFaqsWithMCP(
-        payload.message,
-        env.SHOP_DOMAIN,
-        env.VECTOR_INDEX,
-        undefined,
-        3
-      );
-      if (ragResult.results.length > 0) {
-        ragContext = formatRagContextForPrompt(ragResult);
-        console.log('[handleChat] ✅ RAG: Found', ragResult.results.length, 'policy documents');
-      } else {
-        console.log('[handleChat] ⚠️ RAG: No policies found');
-      }
-    } else if (env.VECTOR_INDEX) {
-      // Vectorize-only fallback
-      const ragResult = await searchShopPoliciesAndFaqs(
-        payload.message,
-        env.VECTOR_INDEX,
-        undefined,
-        3
-      );
-      if (ragResult.results.length > 0) {
-        ragContext = formatRagContextForPrompt(ragResult);
-        console.log('[handleChat] ✅ RAG: Found', ragResult.results.length, 'documents (Vectorize only)');
-      }
+    if (isConversational) {
+      console.log('[handleChat] ⏭️ RAG_WORKER: Skipped (conversational query)');
+    } else if (!env.RAG_WORKER) {
+      console.error('[handleChat] ⚠️ RAG_WORKER: Service binding not configured!');
     }
   }
   

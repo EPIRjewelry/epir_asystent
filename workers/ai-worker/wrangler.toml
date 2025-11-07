@@ -17,3 +17,5 @@ enabled = true
 enabled = true
 head_sampling_rate = 1
 invocation_logs = true
+# Log filter: Only logs from THIS worker (epir-ai-worker)
+# Use filter in Cloudflare dashboard: ScriptName == "epir-ai-worker"

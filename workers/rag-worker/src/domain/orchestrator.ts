@@ -106,7 +106,7 @@ export async function orchestrateRag(options: RagOptions): Promise<string> {
   try {
     // CART INTENT: Get cart data via MCP
     if (intent === 'cart' && cartId) {
-      console.log('[Orchestrator] 🛒 Cart intent detected');
+      console.log('[RAG_WORKER/Orchestrator] 🛒 Cart intent detected');
       
       const cartRaw = await getCart(cartId);
       
@@ -124,7 +124,7 @@ export async function orchestrateRag(options: RagOptions): Promise<string> {
 
     // ORDER INTENT: Get order status via MCP
     if (intent === 'order') {
-      console.log('[Orchestrator] 📦 Order intent detected');
+      console.log('[RAG_WORKER/Orchestrator] 📦 Order intent detected');
       
       const orderRaw = await getMostRecentOrder();
       
@@ -142,7 +142,7 @@ export async function orchestrateRag(options: RagOptions): Promise<string> {
 
     // FAQ INTENT: Try MCP first, fallback to Vectorize
     if (intent === 'faq') {
-      console.log('[Orchestrator] ❓ FAQ intent detected');
+      console.log('[RAG_WORKER/Orchestrator] ❓ FAQ intent detected');
       
       // Try MCP first (PRIMARY source)
       const mcpFaq = await searchPoliciesFaq(query);

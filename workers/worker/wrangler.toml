@@ -74,6 +74,9 @@ enabled = true
 enabled = true
 head_sampling_rate = 1
 invocation_logs = true
+# Log filter: Only logs from THIS worker (epir-art-jewellery-worker)
+# Cloudflare automatically prefixes logs with worker name in dashboard
+# Use filter in dashboard: ScriptName == "epir-art-jewellery-worker"
 
 [vars]
 ALLOWED_ORIGIN = "https://epir-art-silver-jewellery.myshopify.com"
