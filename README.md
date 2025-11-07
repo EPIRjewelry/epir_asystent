@@ -32,7 +32,7 @@ Kluczowe pliki i ich rola
 ------------------------------------
 - `GROQ_API_KEY` — wymagane do wywołań Groq.
 - `SHOP_DOMAIN` — domyślna domena sklepu (powinna być zgodna z ustawieniem kanonicznym powyżej).
-- `SHOPIFY_STOREFRONT_TOKEN` — do wywołań Storefront/MCP (jeśli wymagane).
+- `SHOPIFY_STOREFRONT_TOKEN` — do wywołań Storefront/MCP (do MCP nie wymagane).
 - `SHOPIFY_ADMIN_TOKEN` — do fallbacków GraphQL (ustawić przez `wrangler secret put`).
 - Durable Object bindings: `SESSION_DO`, `TOKEN_VAULT_DO`, `RATE_LIMITER_DO`.
 - `DB` (D1) i `VECTOR_INDEX` — opcjonalne (analityka i vector search).

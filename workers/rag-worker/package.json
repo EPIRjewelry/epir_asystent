@@ -8,13 +8,21 @@
     "deploy": "wrangler deploy",
     "test": "vitest"
   },
-  "keywords": ["cloudflare-workers", "rag", "mcp", "vectorize", "shopify"],
+  "keywords": [
+    "cloudflare-workers",
+    "rag",
+    "mcp",
+    "vectorize",
+    "shopify"
+  ],
   "author": "EPIRjewelry",
   "license": "UNLICENSED",
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.10.5",
     "@cloudflare/workers-types": "^4.20241127.0",
+    "jsdom": "^27.1.0",
     "typescript": "^5.3.3",
-    "wrangler": "^3.95.0",
-    "vitest": "^1.0.4"
+    "vitest": "^3.2.0",
+    "wrangler": "^3.95.0"
   }
 }
