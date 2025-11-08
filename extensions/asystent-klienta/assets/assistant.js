@@ -137,6 +137,33 @@ document.addEventListener('DOMContentLoaded', () => {
     if (banner && !loggedInCustomerId && localName) {
       banner.style.display = 'block';
     }
+
+    // ============================================================================
+    // PROACTIVE CHAT ACTIVATION - Listen for events from Web Pixel
+    // ============================================================================
+    // Web Pixel emits 'epir:activate-chat' when analytics-worker recommends activation
+    window.addEventListener('epir:activate-chat', (event) => {
+      console.log('[EPIR Assistant] 🚀 Proactive chat activation triggered:', event.detail);
+      
+      // Auto-open chat if closed
+      if (content && content.classList.contains('is-closed')) {
+        content.classList.remove('is-closed');
+        if (toggle) toggle.setAttribute('aria-expanded', 'true');
+        console.log('[EPIR Assistant] ✅ Chat opened proactively');
+      }
+      
+      // Optional: Add proactive greeting message
+      if (messagesEl && event.detail?.reason) {
+        const proactiveMsg = document.createElement('div');
+        proactiveMsg.className = 'msg msg-assistant proactive-greeting';
+        proactiveMsg.setAttribute('role', 'status');
+        proactiveMsg.innerHTML = `<strong>👋 Cześć!</strong> Widzę, że przeglądasz naszą kolekcję. Mogę Ci w czymś pomóc?`;
+        messagesEl.appendChild(proactiveMsg);
+        
+        // Scroll to show new message
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    });
   } catch (e) {
     console.warn('Assistant init error', e);
   }

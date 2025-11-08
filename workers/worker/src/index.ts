@@ -519,6 +519,16 @@ export class SessionDO {
       return new Response('ok');
     }
 
+    if (method === 'POST' && pathname.endsWith('/activate-proactive-chat')) {
+      const payload = await request.json().catch(() => null);
+      const p = payload as { customer_id?: string; session_id?: string; reason?: string; timestamp?: number } | null;
+      if (!p || !p.customer_id || !p.session_id) {
+        return new Response('Bad Request: customer_id and session_id required', { status: 400 });
+      }
+      await this.activateProactiveChat(p.customer_id, p.session_id, p.reason || 'unknown', p.timestamp || now());
+      return new Response('ok');
+    }
+
     return new Response('Not Found', { status: 404 });
   }
 
@@ -577,6 +587,40 @@ export class SessionDO {
     }
     
     console.log(`[SessionDO] 🛒 Cart action logged: ${action}`, details);
+  }
+
+  private async activateProactiveChat(
+    customerId: string,
+    sessionId: string,
+    reason: string,
+    timestamp: number
+  ): Promise<void> {
+    // ============================================================================
+    // PROACTIVE CHAT ACTIVATION (coordinated by SessionDO)
+    // ============================================================================
+    // Store activation event in DO storage for frontend to poll/SSE
+    const activationEvent = {
+      customer_id: customerId,
+      session_id: sessionId,
+      reason: reason,
+      timestamp: timestamp,
+      activated: true
+    };
+    
+    // Store activation flag
+    await this.state.storage.put('proactive_chat_active', true);
+    await this.state.storage.put('proactive_chat_event', activationEvent);
+    
+    // Add activation event to history (visible in chat)
+    const activationHistory = await this.state.storage.get<Array<any>>('proactive_activations') || [];
+    activationHistory.push(activationEvent);
+    const trimmed = activationHistory.slice(-5); // Keep last 5 activations
+    await this.state.storage.put('proactive_activations', trimmed);
+    
+    console.log(`[SessionDO] 🚀 Proactive chat activated for ${customerId}/${sessionId}, reason: ${reason}`);
+    
+    // FUTURE: Trigger SSE notification to frontend
+    // FUTURE: Send initial proactive message via chat interface
   }
 
   private async trackProductView(

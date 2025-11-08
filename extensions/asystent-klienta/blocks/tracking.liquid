@@ -1,0 +1,16 @@
+{%- comment -%}
+Tracking block for EPIR theme extension.
+This block injects the tracking script asset into storefront pages.
+{%- endcomment -%}
+
+<script src="{{ 'tracking.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "EPIR Tracking",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
+
+<script src="{{ 'tracking.js' | asset_url }}" defer></script>

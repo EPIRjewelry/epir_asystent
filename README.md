@@ -1,62 +1,261 @@
-# EPIR Assistant (epir_asystent)README — EPIR Assistant (epir_asystent)
+## EPIR Asystent — Pełna Analityka i AI-Driven Chat
 
+Autor: Krzysztof Dżugaj
 
+Krótki opis
+---------
+Repozytorium zawiera zaawansowaną implementację AI asystenta sklepu z **pełnym trackingiem 25 eventów** (16 standardowych Shopify + 5 DOM + 4 custom heatmap). System wykorzystuje Cloudflare Workers, Durable Objects, D1 oraz Shopify Extensions zgodnie z best practices.
 
-AI-driven Shopify assistant for EPIR Art Jewellery — microservices architecture with Cloudflare Workers, MCP integration, and real-time customer behavior tracking.Krótkie streszczenie
+## 🎯 Architektura Rozszerzeń (Shopify Best Practices)
 
--------------------
+### ✅ Dlaczego 2 Rozszerzenia?
+Zgodnie z dokumentacją Shopify i weryfikacją x.ai, **heatmap tracking wymaga 2 typów rozszerzeń**:
 
----To repozytorium zawiera rozszerzenie Shopify (UI) oraz backend Cloudflare Worker obsługujący asystenta sklepu EPIR.
+1. **Theme App Extension** (`asystent-klienta`)
+   - Pełny dostęp do DOM
+   - Publikuje custom events przez `Shopify.analytics.publish()`
+   - Zawiera: tracking.js (heatmap) + assistant.js (UI czatu)
 
+2. **Web Pixel Extension** (`my-web-pixel`)
+   - Sandbox (strict) - tylko `analytics.subscribe()`
+   - Subskrybuje WSZYSTKIE 25 eventów
+   - Wysyła dane do analytics-worker
 
+### 📊 Pełne Pokrycie Eventów (25/25)
+#### 16 Standardowych Shopify:
+`page_viewed`, `product_viewed`, `collection_viewed`, `search_submitted`, `product_added_to_cart`, `product_removed_from_cart`, `cart_viewed`, `cart_updated`, `checkout_started`, `checkout_contact_info_submitted`, `checkout_address_info_submitted`, `checkout_shipping_info_submitted`, `payment_info_submitted`, `checkout_completed`, `purchase_completed`, `alert_displayed`
 
-## 📋 **Table of Contents**Ustawienia kanoniczne (NIEZMIENNE)
+#### 5 DOM Events:
+`clicked`, `input_focused`, `input_blurred`, `input_changed`, `form_submitted`
 
----------------------------------
+#### 4 Custom Heatmap Events:
+`epir:click_with_position` (x/y koordynaty), `epir:scroll_depth` (%), `epir:page_exit` (czas), `epir:mouse_sample` (hover)
 
-1. [Overview](#overview)Te ustawienia i wartości w repo są traktowane jako kanoniczne i nie powinny być zmieniane bez uprzedniej zgody zespołu:
+Główne komponenty
+------------------
+- `extensions/my-web-pixel` — Web Pixel Extension (26 subskrypcji), wysyła wszystkie eventy do `analytics-worker`
+- `extensions/asystent-klienta` — Theme App Extension z:
+  - `tracking.js` — zbiera dane heatmap (DOM access) i publikuje custom events
+  - `assistant.js` — UI czatu AI, nasłuchuje `epir:activate-chat`
+- `workers/analytics-worker` — backend analytics, ekstrahuje dane do D1 (41 kolumn), wywołuje AI scoring
+- `workers/worker` (e-a-j.worker) — SessionDO, chat AI, MCP orchestration
 
-2. [Architecture](#architecture)
+Najważniejsze pliki zmodyfikowane/utworzone
+-----------------------------------------
+### Shopify Extensions:
+- `extensions/my-web-pixel/src/index.ts` — 26 subskrypcji eventów (16+5+4+1 ui_extension_errored)
+- `extensions/asystent-klienta/assets/tracking.js` — tracking heatmap z DOM access
+- `extensions/asystent-klienta/blocks/tracking.liquid` — wstrzyknięcie skryptu tracking
+- `extensions/asystent-klienta/assets/assistant.js` — UI czatu AI
 
-3. [Key Features](#key-features)- SHOP_DOMAIN: epir-art-silver-jewellery.myshopify.com
+### Cloudflare Workers:
+- `workers/analytics-worker/src/index.ts` — ekstrakcja 41 kolumn z eventów, AI scoring
+- `workers/analytics-worker/schema-pixel-events-base.sql` — bazowa tabela (18 kolumn)
+- `workers/analytics-worker/schema-pixel-events-v3-heatmap.sql` — rozszerzenie (+23 kolumny heatmap)
+- `workers/analytics-worker/schema-customer-sessions.sql` — sesje AI
+- `workers/worker/src/index.ts` — SessionDO, chat AI, MCP routing
 
-4. [Canonical Settings (IMMUTABLE)](#canonical-settings-immutable)  - Gdzie: `workers/worker/wrangler.toml` (pole `SHOP_DOMAIN`) oraz `workers/worker/src/*` wykorzystują `env.SHOP_DOMAIN`.
+Jak uruchomić lokalnie / migracje D1
+-----------------------------------
+### 1. Migracja D1 Database (analytics-worker)
 
-5. [Project Structure](#project-structure)
+Baza danych: `epir_art_jewellery` (binding: `DB` w wrangler.toml)
 
-6. [Environment Variables & Secrets](#environment-variables--secrets)- CANONICAL_MCP_URL: https://epir-art-silver-jewellery.myshopify.com/api/mcp
+```powershell
+cd workers\analytics-worker
 
-7. [Development Workflow](#development-workflow)  - Gdzie: `workers/worker/src/rag.ts` definiuje `CANONICAL_MCP_URL` używane przez RAG.
+# Bazowa tabela pixel_events (18 kolumn)
+wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-base.sql
 
-8. [Database Schema](#database-schema)  - Uwagi: Kod ogólnie konstruuje MCP URL z `env.SHOP_DOMAIN` (np. `https://{shop}/api/mcp`). Jednak w repo występuje jawny canonical URL — traktuj go jako źródło prawdy.
+# Rozszerzenie heatmap (+23 kolumny)
+wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-v3-heatmap.sql
 
-9. [Logging & Monitoring](#logging--monitoring)
+# Tabela customer_sessions (AI scoring)
+wrangler d1 execute epir_art_jewellery --local --file=./schema-customer-sessions.sql
 
-10. [Deployment](#deployment)- Model LLM (HARDCODED): `openai/gpt-oss-120b`
+# Weryfikacja schematu (41 kolumn w pixel_events)
+wrangler d1 execute epir_art_jewellery --local --command="PRAGMA table_info(pixel_events);"
+```
 
-11. [Testing](#testing)  - Gdzie: `workers/worker/src/ai-client.ts` w stałej `GROQ_MODEL_ID`.
+### 2. Deploy Workers
 
-12. [Contact](#contact)  - UWAGA: Prompty, parsowanie streamingu i ogólny kontrakt są zaprojektowane dla tego modelu — nie modyfikuj wartości bez autoryzacji.
+```powershell
+# Analytics Worker
+cd workers\analytics-worker
+wrangler deploy
 
+# Chat Worker (SessionDO)
+cd ..\worker
+wrangler deploy
+```
 
+### 3. Deploy Shopify Extensions
 
----Kluczowe pliki i ich rola
+```powershell
+cd c:\Users\user\epir_asystent
+shopify app deploy
+```
 
--------------------------
+**Uwaga:** Shopify pozwala na **1 Theme App Extension na aplikację**. Dlatego tracking.js jest zintegrowany z asystent-klienta.
 
-## 🎯 **Overview**- `extensions/asystent-klienta/` — frontend rozszerzenia Shopify (UI, assets).
+## 📊 Database Schema (D1)
 
-- `workers/worker/src/index.ts` — główny routing Workera i `SessionDO` (Durable Object) przechowujący historię sesji i `cart_id`.
+### Tabela: `pixel_events` (41 kolumn)
+**Bazowe (18):** id, event_type, event_name, created_at, customer_id, session_id, page_url, page_title, referrer, user_agent, product_id, product_title, product_variant_id, product_price, product_quantity, cart_total, raw_data, updated_at
 
-EPIR Assistant is a production-grade AI chatbot integrated with Shopify, built using:- `workers/worker/src/mcp_server.ts` i `workers/worker/src/mcp/tool_schema.ts` — warstwa narzędzi (MCP) i schematy funkcji.
+**Heatmap (23):** click_x, click_y, viewport_w, viewport_h, scroll_depth_percent, time_on_page_seconds, element_tag, element_id, element_class, input_name, form_id, search_query, collection_id, collection_handle, checkout_token, order_id, order_value, alert_type, alert_message, error_message, extension_id, mouse_x, mouse_y
 
-- **Cloudflare Workers** (microservices architecture)- `workers/worker/src/shopify-mcp-client.ts` — klient MCP / fallback do GraphQL (Admin/Storefront).
+### Tabela: `customer_sessions`
+Kolumny: customer_id, session_id, event_count, first_event_at, last_event_at, ai_score, ai_analysis, should_activate_chat, chat_activated_at, activation_reason, created_at, updated_at
 
-- **Shopify MCP** (Merchant Component Platform) as primary data source- `workers/worker/src/ai-client.ts` — klient Groq (streaming/non-streaming). Zawiera HARDCODED `GROQ_MODEL_ID`.
+Walidacja i testy po wdrożeniu
+------------------------------
+### 1. Weryfikacja Web Pixel (Browser DevTools)
+```javascript
+// Otwórz Console w sklepie
+// Sprawdź, czy pixel wysyła eventy
+fetch('https://epir-analityc-worker.YOUR_ACCOUNT.workers.dev/pixel', {
+  method: 'POST',
+  body: JSON.stringify({
+    event_type: 'page_viewed',
+    customer_id: 'test-123',
+    session_id: 'session-456'
+  })
+})
+```
 
-- **Groq API** (`openai/gpt-oss-120b` model)- `workers/worker/src/rag.ts` — RAG helpers i stały `CANONICAL_MCP_URL`.
+### 2. Sprawdź dane w D1
+```powershell
+# Lokalne sprawdzenie
+wrangler d1 execute epir_art_jewellery --local --command="SELECT event_type, COUNT(*) as count FROM pixel_events GROUP BY event_type;"
 
-- **Durable Objects** for session management
+# Produkcja (remote)
+wrangler d1 execute epir_art_jewellery --remote --command="SELECT * FROM customer_sessions ORDER BY last_event_at DESC LIMIT 5;"
+```
+
+### 3. Logi Cloudflare Workers
+- Dashboard → Workers & Pages → analytics-worker → Logs
+- Szukaj `[PIXEL EVENT]` dla eventów, `[AI SCORING]` dla wywołań AI
+
+Troubleshooting (częste problemy)
+--------------------------------
+### Błąd: "Couldn't find a D1 DB with the name"
+- **Przyczyna:** Nazwa w CLI nie odpowiada `database_name` w `wrangler.toml`
+- **Rozwiązanie:** Sprawdź `[[d1_databases]]` w `workers/analytics-worker/wrangler.toml` (powinno być `epir_art_jewellery`)
+
+### Błąd: "Unable to read SQL text file"
+- **Przyczyna:** Uruchamiasz z złego katalogu
+- **Rozwiązanie:** `cd workers\analytics-worker` i uruchom stamtąd
+
+### Błąd: "You cannot add module... maximum number of 1 module allowed"
+- **Przyczyna:** Shopify **ogranicza do 1 Theme App Extension** na aplikację
+- **Rozwiązanie:** Połącz tracking.js z istniejącym Theme Extension (jak w `asystent-klienta`)
+
+### Błąd: "Tag 'schema' is missing" w .liquid
+- **Przyczyna:** Brak `{% schema %}` w Liquid block
+- **Rozwiązanie:** Dodaj:
+```liquid
+{% schema %}
+{
+  "name": "Block Name",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
+```
+
+### Web Pixel nie zbiera custom events
+- **Przyczyna:** Theme App Extension nie publikuje eventów lub brak wczytania tracking.js
+- **Rozwiązanie:** 
+  1. Sprawdź, czy `tracking.liquid` wczytuje `<script src="{{ 'tracking.js' | asset_url }}">`
+  2. Włącz block w Theme Editor (Shopify Admin → Themes → Customize)
+  3. Sprawdź Console przeglądarki: powinno być `[EPIR Tracking] initialized`
+
+## 🎯 Architektura Kompletna (Flow Diagram)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  STOREFRONT (Sklep Shopify)                                 │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Theme App Extension: asystent-klienta               │   │
+│  ├─────────────────────────────────────────────────────┤   │
+│  │  1. tracking.js (DOM access)                        │   │
+│  │     • document.addEventListener('click', ...)       │   │
+│  │     • Shopify.analytics.publish('epir:click_with... │   │
+│  │     • 4 custom events → Web Pixel                   │   │
+│  │                                                     │   │
+│  │  2. assistant.js (UI czatu AI)                      │   │
+│  │     • Nasłuchuje 'epir:activate-chat'               │   │
+│  │     • WebSocket do chat workera                     │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ Web Pixel Extension: my-web-pixel (sandbox)         │   │
+│  ├─────────────────────────────────────────────────────┤   │
+│  │  • analytics.subscribe() x 26 eventów               │   │
+│  │    - 16 standard (page_viewed, product_viewed...)   │   │
+│  │    - 5 DOM (clicked, input_focused...)              │   │
+│  │    - 4 custom (epir:click_with_position...)         │   │
+│  │    - 1 error (ui_extension_errored)                 │   │
+│  │  • fetch() → analytics-worker                       │   │
+│  └─────────────────────────────────────────────────────┘   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ↓
+┌─────────────────────────────────────────────────────────────┐
+│  CLOUDFLARE WORKERS                                         │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  analytics-worker                                           │
+│  ├─ POST /pixel                                             │
+│  ├─ Ekstrahuje dane → 41 kolumn                            │
+│  ├─ D1: pixel_events (base + heatmap)                      │
+│  ├─ D1: customer_sessions (AI scoring)                     │
+│  └─ Service Binding → AI_WORKER                            │
+│                                                             │
+│  chat-worker (epir-art-jewellery-worker)                   │
+│  ├─ SessionDO (Durable Object)                             │
+│  │  • Historia konwersacji (SQLite)                        │
+│  │  • Cart tracking                                        │
+│  │  • Product views (last 10)                             │
+│  ├─ RAG Worker (Service Binding)                           │
+│  │  └─ Shopify MCP → product catalog, cart, FAQ          │
+│  └─ Groq API (gpt-oss-120b)                                │
+│     • Streaming SSE responses                              │
+│     • Tool calling (MCP tools)                             │
+│                                                             │
+│  D1 Database: epir_art_jewellery                           │
+│  ├─ pixel_events (41 kolumn)                               │
+│  └─ customer_sessions (AI analysis)                        │
+└─────────────────────────────────────────────────────────────┘
+``` 
+## 🔗 Linki i Zasoby
+
+- **Shopify Web Pixels API:** https://shopify.dev/docs/api/web-pixels-api
+- **Theme App Extensions:** https://shopify.dev/docs/apps/build/online-store/theme-app-extensions
+- **Cloudflare Workers:** https://developers.cloudflare.com/workers/
+- **Durable Objects:** https://developers.cloudflare.com/durable-objects/
+- **D1 Database:** https://developers.cloudflare.com/d1/
+
+## 📝 Autorstwo i Kontakt
+
+**Autor:** Krzysztof Dżugaj  
+**Projekt:** EPIR Art Jewellery AI Assistant  
+**Data:** Listopad 2025
+
+### Propozycje Dalszego Rozwoju:
+1. ✅ **Dodać testy integracyjne** - symulacja sekwencji eventów do analytics-worker
+2. ✅ **Monitoring i alerting** - Sentry/Cloudflare Logs dla krytycznych błędów
+3. ✅ **Dashboard analityczny** - wizualizacja heatmap i customer journey
+4. ✅ **A/B testing** - warianty wiadomości AI dla optymalizacji konwersji
+5. ✅ **Multi-language support** - rozszerzenie na inne języki (PL/EN/DE)
+
+---
+
+**Status Projektu:** ✅ Production Ready (Listopad 2025)  
+**Wersja:** 1.0 - Full Analytics (25 events) + AI Chat
 
 - **D1 Database** for analytics and conversation historyŚrodowisko i sekretne zmienne (ważne)
 

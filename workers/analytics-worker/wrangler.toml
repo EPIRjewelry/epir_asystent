@@ -18,6 +18,16 @@ name = "SESSION_DO"
 class_name = "SessionDO"
 script_name = "epir-art-jewellery-worker"
 
+# ============================================================================
+# SERVICE BINDING: AI Worker for customer behavior analysis
+# ============================================================================
+# Analytics worker calls AI worker via Service Binding (zero-cost RPC)
+# AI worker performs ML scoring and proactive chat recommendations
+# @see https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/
+[[services]]
+binding = "AI_WORKER"
+service = "epir-ai-worker"
+
 [observability]
 enabled = true
 [observability.logs]
