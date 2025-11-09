@@ -1,11 +1,16 @@
-import { defineConfig } from 'vitest/config';
+import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config';
 
-export default defineConfig({
+export default defineWorkersConfig({
   test: {
-    environment: 'jsdom',
-    include: ['src/**/*.test.ts'],
-    coverage: {
-      reporter: ['text', 'json'],
+    poolOptions: {
+      workers: {
+        main: './src/index.ts',
+        miniflare: {
+          compatibilityDate: '2025-09-30',
+          compatibilityFlags: ['nodejs_compat'],
+          d1Databases: ['DB'],
+        },
+      },
     },
   },
 });
