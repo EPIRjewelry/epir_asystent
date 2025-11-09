@@ -199,8 +199,6 @@ export interface Env {
   GROQ_API_KEY: string;
   DEV_BYPASS?: string; // '1' to bypass HMAC in dev
   WORKER_ORIGIN?: string;
-  // Service binding to analytics worker (optional in tests)
-  ANALYTICS?: Fetcher;
   // Service binding to AI worker (reusable Groq client)
   AI_WORKER?: Fetcher;
   // Service binding to RAG worker (reusable RAG orchestrator)
@@ -295,105 +293,6 @@ function cors(env: Env): Record<string, string> {
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Shop-Signature',
   };
-}
-
-// Pixel analytics helpers (safe, optional; no routing changes elsewhere)
-async function ensurePixelTable(db: D1Database): Promise<void> {
-  try {
-    await db
-      .prepare(
-        `CREATE TABLE IF NOT EXISTS pixel_events (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          event_data TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`
-      )
-      .run();
-  } catch (e) {
-    console.warn('[pixel] ensurePixelTable failed (non-fatal):', e);
-  }
-}
-
-async function handlePixelPost(request: Request, env: Env): Promise<Response> {
-  if (!env.DB) {
-    return new Response(JSON.stringify({ ok: false, error: 'DB not configured' }), {
-      status: 500,
-      headers: { ...cors(env), 'Content-Type': 'application/json' },
-    });
-  }
-
-  const body = await request.json().catch(() => null) as { type?: string; data?: unknown } | null;
-  if (!body || typeof body.type !== 'string') {
-    return new Response(JSON.stringify({ ok: false, error: 'Invalid payload' }), {
-      status: 400,
-      headers: { ...cors(env), 'Content-Type': 'application/json' },
-    });
-  }
-
-  await ensurePixelTable(env.DB);
-  try {
-    // Store entire event as JSON in event_data column (matches existing schema)
-    const eventJson = JSON.stringify({ event: body.type, data: body.data, timestamp: Date.now() });
-    await env.DB
-      .prepare('INSERT INTO pixel_events (event_data) VALUES (?1)')
-      .bind(eventJson)
-      .run();
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { ...cors(env), 'Content-Type': 'application/json' },
-    });
-  } catch (e) {
-    console.error('[pixel] insert failed:', e);
-    return new Response(JSON.stringify({ ok: false, error: 'insert_failed' }), {
-      status: 500,
-      headers: { ...cors(env), 'Content-Type': 'application/json' },
-    });
-  }
-}
-
-async function handlePixelCount(env: Env): Promise<Response> {
-  if (!env.DB) {
-    return new Response(JSON.stringify({ count: 0 }), { status: 200, headers: { ...cors(env), 'Content-Type': 'application/json' } });
-  }
-  await ensurePixelTable(env.DB);
-  try {
-    const row = await env.DB.prepare('SELECT COUNT(*) as cnt FROM pixel_events').first<{ cnt: number }>();
-    const count = (row && typeof row.cnt === 'number') ? row.cnt : 0;
-    return new Response(JSON.stringify({ count }), { status: 200, headers: { ...cors(env), 'Content-Type': 'application/json' } });
-  } catch (e) {
-    console.warn('[pixel] count failed:', e);
-    return new Response(JSON.stringify({ count: 0 }), { status: 200, headers: { ...cors(env), 'Content-Type': 'application/json' } });
-  }
-}
-
-async function handlePixelEvents(env: Env, limitParam?: string | null): Promise<Response> {
-  const limit = Math.max(1, Math.min(200, Number(limitParam) || 20));
-  if (!env.DB) {
-    return new Response(JSON.stringify({ events: [] }), { status: 200, headers: { ...cors(env), 'Content-Type': 'application/json' } });
-  }
-  await ensurePixelTable(env.DB);
-  try {
-    // Note: Use event_data column (existing schema)
-    const sql = `SELECT id, event_data, created_at FROM pixel_events ORDER BY id DESC LIMIT ${limit}`;
-    const { results } = await env.DB.prepare(sql).all<{ id: number; event_data: string; created_at: string }>();
-    const events = results?.map((r: { id: number; event_data: string; created_at: string }) => {
-      let parsed: unknown = r.event_data;
-      try {
-        parsed = JSON.parse(r.event_data);
-      } catch {
-        // Keep as string if not JSON
-      }
-      return {
-        id: r.id,
-        ...((typeof parsed === 'object' && parsed !== null) ? parsed : { raw: r.event_data }),
-        created_at: r.created_at,
-      };
-    }) || [];
-    return new Response(JSON.stringify({ events }), { status: 200, headers: { ...cors(env), 'Content-Type': 'application/json' } });
-  } catch (e) {
-    console.warn('[pixel] events read failed:', e);
-    return new Response(JSON.stringify({ events: [] }), { status: 200, headers: { ...cors(env), 'Content-Type': 'application/json' } });
-  }
 }
 
 export class SessionDO {
@@ -1376,36 +1275,6 @@ export default {
     // Healthchecks
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/ping' || url.pathname === '/health')) {
       return new Response('ok', { status: 200, headers: cors(env) });
-    }
-
-    // Pixel analytics endpoints
-    // Prefer forwarding to analytics service if available, otherwise fall back to local handlers
-    if (url.pathname === '/pixel' && request.method === 'POST') {
-      if (env.ANALYTICS && typeof env.ANALYTICS.fetch === 'function') {
-        // Proxy the request to analytics service
-        const proxied = new Request('https://analytics.internal/pixel', {
-          method: 'POST',
-          headers: request.headers,
-          body: await request.text(),
-        });
-        return env.ANALYTICS.fetch(proxied);
-      }
-      return handlePixelPost(request, env);
-    }
-    if (url.pathname === '/pixel/count' && request.method === 'GET') {
-      if (env.ANALYTICS && typeof env.ANALYTICS.fetch === 'function') {
-        return env.ANALYTICS.fetch(new Request('https://analytics.internal/pixel/count'));
-      }
-      return handlePixelCount(env);
-    }
-    if (url.pathname === '/pixel/events' && request.method === 'GET') {
-      if (env.ANALYTICS && typeof env.ANALYTICS.fetch === 'function') {
-        const limit = url.searchParams.get('limit');
-        const proxyUrl = new URL('https://analytics.internal/pixel/events');
-        if (limit) proxyUrl.searchParams.set('limit', limit);
-        return env.ANALYTICS.fetch(new Request(proxyUrl.toString()));
-      }
-      return handlePixelEvents(env, url.searchParams.get('limit'));
     }
 
     // [NOWE] Globalny stra┼╝nik HMAC dla App Proxy: wszystkie POST-y pod /apps/assistant/*

@@ -33,7 +33,7 @@ type VectorizeIndex = any; // @cloudflare/workers-types/experimental
  * - D1 Database
  * - Vectorize Index
  * - KV Namespace
- * - Service Bindings (AI Worker, RAG Worker, Analytics)
+ * - Service Bindings (AI Worker, RAG Worker)
  * - AI Binding (Cloudflare AI)
  * - Secrets (Groq API Key, Shopify tokens)
  * - Vars (Shop domain, allowed origins)
@@ -110,12 +110,6 @@ export interface Env {
    * - GET /health - Health check
    */
   RAG_WORKER?: Fetcher;
-
-  /**
-   * Analytics Worker Service Binding
-   * Logs events to external analytics system
-   */
-  ANALYTICS?: Fetcher;
 
   // ========================================
   // CLOUDFLARE AI
