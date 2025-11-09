@@ -115,6 +115,91 @@ async function ensureCustomerSessionsTable(db: D1Database): Promise<void> {
   await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_session_id ON customer_sessions(session_id)`).run().catch(() => {});
   await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_should_activate ON customer_sessions(should_activate_chat, chat_activated_at) WHERE should_activate_chat = 1 AND chat_activated_at IS NULL`).run().catch(() => {});
   await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_last_event ON customer_sessions(last_event_at DESC)`).run().catch(() => {});
+}
+
+async function ensureCustomerEventsTable(db: D1Database): Promise<void> {
+  // Create customer_events table matching schema-events.sql
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS customer_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        event_timestamp INTEGER NOT NULL,
+        event_data TEXT,
+        page_url TEXT,
+        page_title TEXT,
+        referrer TEXT,
+        product_id TEXT,
+        product_title TEXT,
+        product_price REAL,
+        variant_id TEXT,
+        cart_token TEXT,
+        cart_total REAL,
+        user_agent TEXT,
+        ip_address TEXT,
+        created_at INTEGER NOT NULL
+      )`
+    )
+    .run()
+    .catch(() => {});
+
+  // Create indexes for customer_events (matching schema-events.sql)
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_customer_id ON customer_events(customer_id, event_timestamp DESC)`).run().catch(() => {});
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_session_id ON customer_events(session_id, event_timestamp DESC)`).run().catch(() => {});
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_event_type ON customer_events(event_type, event_timestamp DESC)`).run().catch(() => {});
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_product_id ON customer_events(product_id, event_timestamp DESC) WHERE product_id IS NOT NULL`).run().catch(() => {});
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_timestamp ON customer_events(event_timestamp DESC)`).run().catch(() => {});
+}
+
+async function insertCustomerEvent(
+  db: D1Database,
+  customerId: string,
+  sessionId: string,
+  eventType: string,
+  timestamp: number,
+  eventData: {
+    pageUrl?: string | null;
+    pageTitle?: string | null;
+    productId?: string | null;
+    productTitle?: string | null;
+    productPrice?: number | null;
+    variantId?: string | null;
+    cartToken?: string | null;
+    cartTotal?: number | null;
+    eventDataJson?: string | null;
+  }
+): Promise<void> {
+  try {
+    await db
+      .prepare(
+        `INSERT INTO customer_events (
+          customer_id, session_id, event_type, event_timestamp,
+          page_url, page_title, product_id, product_title, product_price,
+          variant_id, cart_token, cart_total, event_data, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`
+      )
+      .bind(
+        customerId,
+        sessionId,
+        eventType,
+        timestamp,
+        eventData.pageUrl || null,
+        eventData.pageTitle || null,
+        eventData.productId || null,
+        eventData.productTitle || null,
+        eventData.productPrice || null,
+        eventData.variantId || null,
+        eventData.cartToken || null,
+        eventData.cartTotal || null,
+        eventData.eventDataJson || null,
+        timestamp
+      )
+      .run();
+  } catch (e) {
+    console.error('[ANALYTICS_WORKER] ❌ Failed to insert customer event:', e);
+  }
 }// ============================================================================
 // CUSTOMER BEHAVIOR TRACKING & AI SCORING
 // ============================================================================
@@ -635,7 +720,19 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     let activateChat = false; // Flag to return in response for Web Pixel
     if (customerId && sessionId) {
       await ensureCustomerSessionsTable(env.DB);
+      await ensureCustomerEventsTable(env.DB);
       await upsertCustomerSession(env.DB, customerId, sessionId, timestamp);
+      
+      // Insert event to customer_events table for journey tracking
+      await insertCustomerEvent(env.DB, customerId, sessionId, eventType, timestamp, {
+        pageUrl,
+        pageTitle,
+        productId,
+        productTitle,
+        variantId,
+        cartToken: cartId,
+        eventDataJson: eventJson,
+      });
       
       // Get current event count for this session
       const sessionData = await env.DB
@@ -776,6 +873,189 @@ async function handlePixelEvents(env: Env, limitParam?: string | null): Promise<
   }
 }
 
+async function handleCustomerJourney(env: Env, url: URL): Promise<Response> {
+  await ensureCustomerEventsTable(env.DB);
+  
+  const customerId = url.searchParams.get('customer_id');
+  const sessionId = url.searchParams.get('session_id');
+  const limit = Math.min(Number(url.searchParams.get('limit')) || 100, 500);
+  
+  try {
+    let query: string;
+    let bindings: string[];
+    
+    if (sessionId) {
+      // Get all events for a specific session
+      query = `
+        SELECT 
+          customer_id, 
+          session_id, 
+          event_type, 
+          event_timestamp,
+          page_url,
+          page_title,
+          product_id,
+          product_title,
+          variant_id,
+          cart_token,
+          event_data
+        FROM customer_events
+        WHERE session_id = ?1
+        ORDER BY event_timestamp ASC
+        LIMIT ${limit}
+      `;
+      bindings = [sessionId];
+    } else if (customerId) {
+      // Get all events for a customer (across sessions)
+      query = `
+        SELECT 
+          customer_id, 
+          session_id, 
+          event_type, 
+          event_timestamp,
+          page_url,
+          page_title,
+          product_id,
+          product_title,
+          variant_id,
+          cart_token,
+          event_data
+        FROM customer_events
+        WHERE customer_id = ?1
+        ORDER BY event_timestamp ASC
+        LIMIT ${limit}
+      `;
+      bindings = [customerId];
+    } else {
+      // Get all recent events grouped by customer
+      query = `
+        SELECT 
+          customer_id, 
+          session_id, 
+          event_type, 
+          event_timestamp,
+          page_url,
+          page_title,
+          product_id,
+          product_title,
+          variant_id,
+          cart_token,
+          event_data
+        FROM customer_events
+        ORDER BY event_timestamp DESC
+        LIMIT ${limit}
+      `;
+      bindings = [];
+    }
+    
+    const stmt = env.DB.prepare(query);
+    const result = bindings.length > 0 ? await stmt.bind(...bindings).all() : await stmt.all();
+    
+    if (!result?.results) {
+      return json({ journey: [] }, 200);
+    }
+    
+    // Group by customer and session for easier analysis
+    const groupedByCustomer: Record<string, any> = {};
+    
+    for (const event of result.results as any[]) {
+      const cid = event.customer_id;
+      const sid = event.session_id;
+      
+      if (!groupedByCustomer[cid]) {
+        groupedByCustomer[cid] = {
+          customer_id: cid,
+          sessions: {},
+        };
+      }
+      
+      if (!groupedByCustomer[cid].sessions[sid]) {
+        groupedByCustomer[cid].sessions[sid] = {
+          session_id: sid,
+          events: [],
+        };
+      }
+      
+      groupedByCustomer[cid].sessions[sid].events.push({
+        event_type: event.event_type,
+        timestamp: event.event_timestamp,
+        page_url: event.page_url,
+        page_title: event.page_title,
+        product_id: event.product_id,
+        product_title: event.product_title,
+        variant_id: event.variant_id,
+        cart_token: event.cart_token,
+      });
+    }
+    
+    return json({ 
+      journey: Object.values(groupedByCustomer).map(customer => ({
+        customer_id: customer.customer_id,
+        sessions: Object.values(customer.sessions),
+      }))
+    }, 200);
+  } catch (e) {
+    console.error('[ANALYTICS_WORKER] ❌ Failed to get customer journey:', e);
+    return json({ journey: [], error: String(e) }, 500);
+  }
+}
+
+async function handleCustomerSessions(env: Env, url: URL): Promise<Response> {
+  await ensureCustomerSessionsTable(env.DB);
+  
+  const customerId = url.searchParams.get('customer_id');
+  const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 200);
+  
+  try {
+    let query: string;
+    let bindings: string[] = [];
+    
+    if (customerId) {
+      query = `
+        SELECT 
+          customer_id,
+          session_id,
+          event_count,
+          first_event_at,
+          last_event_at,
+          ai_score,
+          should_activate_chat,
+          chat_activated_at,
+          activation_reason
+        FROM customer_sessions
+        WHERE customer_id = ?1
+        ORDER BY first_event_at DESC
+        LIMIT ${limit}
+      `;
+      bindings = [customerId];
+    } else {
+      query = `
+        SELECT 
+          customer_id,
+          session_id,
+          event_count,
+          first_event_at,
+          last_event_at,
+          ai_score,
+          should_activate_chat,
+          chat_activated_at,
+          activation_reason
+        FROM customer_sessions
+        ORDER BY last_event_at DESC
+        LIMIT ${limit}
+      `;
+    }
+    
+    const stmt = env.DB.prepare(query);
+    const result = bindings.length > 0 ? await stmt.bind(...bindings).all() : await stmt.all();
+    
+    return json({ sessions: result?.results || [] }, 200);
+  } catch (e) {
+    console.error('[ANALYTICS_WORKER] ❌ Failed to get customer sessions:', e);
+    return json({ sessions: [], error: String(e) }, 500);
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -787,6 +1067,12 @@ export default {
     }
     if (request.method === 'GET' && url.pathname === '/pixel/events') {
       return handlePixelEvents(env, url.searchParams.get('limit'));
+    }
+    if (request.method === 'GET' && url.pathname === '/journey') {
+      return handleCustomerJourney(env, url);
+    }
+    if (request.method === 'GET' && url.pathname === '/sessions') {
+      return handleCustomerSessions(env, url);
     }
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/healthz')) {
       return new Response('ok', { status: 200 });

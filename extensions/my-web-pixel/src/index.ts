@@ -41,7 +41,7 @@ register(async ({ analytics, browser, init }) => {
           sessionId: sessionId
         };
         
-        const response = await fetch('/pixel', {
+        const response = await fetch('https://epir-analityc-worker.krzysztofdzugaj.workers.dev/pixel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: eventType, data: enrichedData })

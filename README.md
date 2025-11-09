@@ -59,23 +59,25 @@ Jak uruchomić lokalnie / migracje D1
 -----------------------------------
 ### 1. Migracja D1 Database (analytics-worker)
 
-Baza danych: `epir_art_jewellery` (binding: `DB` w wrangler.toml)
+**UWAGA:** Nazwa bazy: `jewelry-analytics-db` (binding: `DB` w wrangler.toml)
 
 ```powershell
 cd workers\analytics-worker
 
 # Bazowa tabela pixel_events (18 kolumn)
-wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-base.sql
+wrangler d1 execute jewelry-analytics-db --remote --file=./schema-pixel-events-base.sql
 
-# Rozszerzenie heatmap (+23 kolumny)
-wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-v3-heatmap.sql
+# Rozszerzenie heatmap (+23 kolumny) - WYMAGANE!
+wrangler d1 execute jewelry-analytics-db --remote --file=./schema-pixel-events-v3-heatmap.sql
 
 # Tabela customer_sessions (AI scoring)
-wrangler d1 execute epir_art_jewellery --local --file=./schema-customer-sessions.sql
+wrangler d1 execute jewelry-analytics-db --remote --file=./schema-customer-sessions.sql
 
-# Weryfikacja schematu (41 kolumn w pixel_events)
-wrangler d1 execute epir_art_jewellery --local --command="PRAGMA table_info(pixel_events);"
+# Weryfikacja schematu (powinno być 41 kolumn w pixel_events)
+wrangler d1 execute jewelry-analytics-db --remote --command="PRAGMA table_info(pixel_events);"
 ```
+
+**KRYTYCZNE:** Bez migracji heatmap analytics worker zwróci błąd `insert_failed`!
 
 ### 2. Deploy Workers
 
@@ -110,38 +112,49 @@ Kolumny: customer_id, session_id, event_count, first_event_at, last_event_at, ai
 
 Walidacja i testy po wdrożeniu
 ------------------------------
-### 1. Weryfikacja Web Pixel (Browser DevTools)
-```javascript
-// Otwórz Console w sklepie
-// Sprawdź, czy pixel wysyła eventy
-fetch('https://epir-analityc-worker.YOUR_ACCOUNT.workers.dev/pixel', {
-  method: 'POST',
-  body: JSON.stringify({
-    event_type: 'page_viewed',
-    customer_id: 'test-123',
-    session_id: 'session-456'
-  })
-})
+### 1. Test Analytics Worker (bezpośredni)
+```powershell
+# Test healthcheck
+Invoke-RestMethod -Uri "https://epir-analityc-worker.krzysztofdzugaj.workers.dev/healthz" -Method GET
+
+# Test zapisu eventu
+Invoke-RestMethod -Uri "https://epir-analityc-worker.krzysztofdzugaj.workers.dev/pixel" -Method POST -Headers @{"Content-Type"="application/json"} -Body '{"type":"page_viewed","data":{"customerId":"test-123","sessionId":"session-456","page_url":"https://test.com"}}'
 ```
 
 ### 2. Sprawdź dane w D1
 ```powershell
-# Lokalne sprawdzenie
-wrangler d1 execute epir_art_jewellery --local --command="SELECT event_type, COUNT(*) as count FROM pixel_events GROUP BY event_type;"
+# Ostatnie eventy
+wrangler d1 execute jewelry-analytics-db --remote --command="SELECT event_type, customer_id, session_id, page_url, created_at FROM pixel_events ORDER BY id DESC LIMIT 5;"
 
-# Produkcja (remote)
-wrangler d1 execute epir_art_jewellery --remote --command="SELECT * FROM customer_sessions ORDER BY last_event_at DESC LIMIT 5;"
+# Liczba eventów według typu
+wrangler d1 execute jewelry-analytics-db --remote --command="SELECT event_type, COUNT(*) as count FROM pixel_events GROUP BY event_type;"
+
+# Sesje klientów
+wrangler d1 execute jewelry-analytics-db --remote --command="SELECT * FROM customer_sessions ORDER BY last_event_at DESC LIMIT 5;"
 ```
 
 ### 3. Logi Cloudflare Workers
-- Dashboard → Workers & Pages → analytics-worker → Logs
-- Szukaj `[PIXEL EVENT]` dla eventów, `[AI SCORING]` dla wywołań AI
+```powershell
+# Analytics Worker
+wrangler tail epir-analityc-worker --format pretty
+
+# Main Worker (Chat)
+wrangler tail epir-art-jewellery-worker --format pretty
+```
 
 Troubleshooting (częste problemy)
 --------------------------------
+### Błąd: "error code: 1042" lub "insert_failed"
+- **Przyczyna 1:** `workers_dev = false` ale brak routes - worker niedostępny
+- **Rozwiązanie:** Ustaw `workers_dev = true` w `wrangler.toml` i wdróż ponownie
+- **Przyczyna 2:** Nazwa bazy D1 w `wrangler.toml` nie pasuje do rzeczywistej (użyj `wrangler d1 list`)
+- **Rozwiązanie:** Popraw `database_name` na `jewelry-analytics-db`
+- **Przyczyna 3:** Brak kolumn heatmap w tabeli `pixel_events`
+- **Rozwiązanie:** Wykonaj migrację `schema-pixel-events-v3-heatmap.sql`
+
 ### Błąd: "Couldn't find a D1 DB with the name"
 - **Przyczyna:** Nazwa w CLI nie odpowiada `database_name` w `wrangler.toml`
-- **Rozwiązanie:** Sprawdź `[[d1_databases]]` w `workers/analytics-worker/wrangler.toml` (powinno być `epir_art_jewellery`)
+- **Rozwiązanie:** Sprawdź `[[d1_databases]]` - powinno być `jewelry-analytics-db`
 
 ### Błąd: "Unable to read SQL text file"
 - **Przyczyna:** Uruchamiasz z złego katalogu

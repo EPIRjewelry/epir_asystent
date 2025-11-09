@@ -2,14 +2,14 @@ name = "epir-analityc-worker"
 main = "src/index.ts"
 compatibility_date = "2025-09-30"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = false
+workers_dev = true
 
 [build]
 command = ""
 
 [[d1_databases]]
 binding = "DB"
-database_name = "epir_art_jewellery"
+database_name = "jewelry-analytics-db"
 database_id = "6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23"
 
 # Durable Object binding for Session tracking
