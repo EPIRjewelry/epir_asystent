@@ -1388,13 +1388,24 @@ export default {
           headers: request.headers,
           body: await request.text(),
         });
-        return env.ANALYTICS.fetch(proxied);
+        const response = await env.ANALYTICS.fetch(proxied);
+        // Add CORS headers to allow cross-origin requests from Shopify storefront
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: { ...Object.fromEntries(response.headers), ...cors(env) },
+        });
       }
       return handlePixelPost(request, env);
     }
     if (url.pathname === '/pixel/count' && request.method === 'GET') {
       if (env.ANALYTICS && typeof env.ANALYTICS.fetch === 'function') {
-        return env.ANALYTICS.fetch(new Request('https://analytics.internal/pixel/count'));
+        const response = await env.ANALYTICS.fetch(new Request('https://analytics.internal/pixel/count'));
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: { ...Object.fromEntries(response.headers), ...cors(env) },
+        });
       }
       return handlePixelCount(env);
     }
@@ -1403,7 +1414,12 @@ export default {
         const limit = url.searchParams.get('limit');
         const proxyUrl = new URL('https://analytics.internal/pixel/events');
         if (limit) proxyUrl.searchParams.set('limit', limit);
-        return env.ANALYTICS.fetch(new Request(proxyUrl.toString()));
+        const response = await env.ANALYTICS.fetch(new Request(proxyUrl.toString()));
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: { ...Object.fromEntries(response.headers), ...cors(env) },
+        });
       }
       return handlePixelEvents(env, url.searchParams.get('limit'));
     }
