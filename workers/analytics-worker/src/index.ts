@@ -22,135 +22,174 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
 }
 
 async function ensurePixelTable(db: D1Database): Promise<void> {
+  console.log('[ANALYTICS_WORKER] 🔧 Ensuring pixel_events table exists...');
+  
   // Create table matching schema.sql structure (Shopify Web Pixels API + heatmap v3)
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS pixel_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        customer_id TEXT,
-        session_id TEXT,
-        event_type TEXT NOT NULL,
-        event_name TEXT,
-        product_id TEXT,
-        product_handle TEXT,
-        product_type TEXT,
-        product_vendor TEXT,
-        product_title TEXT,
-        variant_id TEXT,
-        cart_id TEXT,
-        page_url TEXT,
-        page_title TEXT,
-        page_type TEXT,
-        event_data TEXT,
-        created_at INTEGER NOT NULL,
-        click_x INTEGER,
-        click_y INTEGER,
-        viewport_w INTEGER,
-        viewport_h INTEGER,
-        scroll_depth_percent INTEGER,
-        time_on_page_seconds INTEGER,
-        element_tag TEXT,
-        element_id TEXT,
-        element_class TEXT,
-        input_name TEXT,
-        form_id TEXT,
-        search_query TEXT,
-        collection_id TEXT,
-        collection_handle TEXT,
-        checkout_token TEXT,
-        order_id TEXT,
-        order_value REAL,
-        alert_type TEXT,
-        alert_message TEXT,
-        error_message TEXT,
-        extension_id TEXT,
-        mouse_x INTEGER,
-        mouse_y INTEGER
-      )`
-    )
-    .run()
-    .catch(() => {});
+  try {
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS pixel_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          customer_id TEXT,
+          session_id TEXT,
+          event_type TEXT NOT NULL,
+          event_name TEXT,
+          product_id TEXT,
+          product_handle TEXT,
+          product_type TEXT,
+          product_vendor TEXT,
+          product_title TEXT,
+          variant_id TEXT,
+          cart_id TEXT,
+          page_url TEXT,
+          page_title TEXT,
+          page_type TEXT,
+          event_data TEXT,
+          created_at INTEGER NOT NULL,
+          click_x INTEGER,
+          click_y INTEGER,
+          viewport_w INTEGER,
+          viewport_h INTEGER,
+          scroll_depth_percent INTEGER,
+          time_on_page_seconds INTEGER,
+          element_tag TEXT,
+          element_id TEXT,
+          element_class TEXT,
+          input_name TEXT,
+          form_id TEXT,
+          search_query TEXT,
+          collection_id TEXT,
+          collection_handle TEXT,
+          checkout_token TEXT,
+          order_id TEXT,
+          order_value REAL,
+          alert_type TEXT,
+          alert_message TEXT,
+          error_message TEXT,
+          extension_id TEXT,
+          mouse_x INTEGER,
+          mouse_y INTEGER
+        )`
+      )
+      .run();
+    console.log('[ANALYTICS_WORKER] ✅ Table pixel_events ensured');
+  } catch (err) {
+    console.error('[ANALYTICS_WORKER] ❌ Failed to create pixel_events table:', err);
+    throw err;
+  }
   
   // Create indexes (idempotent)
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_customer ON pixel_events(customer_id, created_at)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_session ON pixel_events(session_id, created_at)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_product ON pixel_events(product_id, created_at)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_event_type ON pixel_events(event_type, created_at)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_created_at ON pixel_events(created_at)`).run().catch(() => {});
-  
-  // Heatmap-specific indexes (v3)
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_clicks ON pixel_events(page_url, event_type, click_x, click_y) WHERE click_x IS NOT NULL`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_scroll ON pixel_events(page_url, scroll_depth_percent) WHERE scroll_depth_percent IS NOT NULL`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_time_on_page ON pixel_events(page_url, time_on_page_seconds) WHERE time_on_page_seconds IS NOT NULL`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_search ON pixel_events(search_query, created_at) WHERE search_query IS NOT NULL`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_collection ON pixel_events(collection_id, created_at) WHERE collection_id IS NOT NULL`).run().catch(() => {});
+  console.log('[ANALYTICS_WORKER] 🔧 Creating indexes...');
+  try {
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_customer ON pixel_events(customer_id, created_at)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_session ON pixel_events(session_id, created_at)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_product ON pixel_events(product_id, created_at)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_event_type ON pixel_events(event_type, created_at)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_created_at ON pixel_events(created_at)`).run();
+    
+    // Heatmap-specific indexes (v3)
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_clicks ON pixel_events(page_url, event_type, click_x, click_y) WHERE click_x IS NOT NULL`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_scroll ON pixel_events(page_url, scroll_depth_percent) WHERE scroll_depth_percent IS NOT NULL`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_time_on_page ON pixel_events(page_url, time_on_page_seconds) WHERE time_on_page_seconds IS NOT NULL`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_search ON pixel_events(search_query, created_at) WHERE search_query IS NOT NULL`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_collection ON pixel_events(collection_id, created_at) WHERE collection_id IS NOT NULL`).run();
+    console.log('[ANALYTICS_WORKER] ✅ Indexes created successfully');
+  } catch (err) {
+    console.warn('[ANALYTICS_WORKER] ⚠️ Failed to create some indexes (may already exist):', err);
+  }
 }
 
 async function ensureCustomerSessionsTable(db: D1Database): Promise<void> {
+  console.log('[ANALYTICS_WORKER] 🔧 Ensuring customer_sessions table exists...');
+  
   // Create customer_sessions table matching schema-customer-sessions.sql
   // Uses INTEGER timestamps (Unix milliseconds) for consistency
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS customer_sessions (
-        customer_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        event_count INTEGER DEFAULT 0,
-        first_event_at INTEGER NOT NULL,
-        last_event_at INTEGER NOT NULL,
-        ai_score REAL DEFAULT 0.0,
-        ai_analysis TEXT,
-        should_activate_chat INTEGER DEFAULT 0,
-        chat_activated_at INTEGER,
-        activation_reason TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (customer_id, session_id)
-      )`
-    )
-    .run()
-    .catch(() => {});
+  try {
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS customer_sessions (
+          customer_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          event_count INTEGER DEFAULT 0,
+          first_event_at INTEGER NOT NULL,
+          last_event_at INTEGER NOT NULL,
+          ai_score REAL DEFAULT 0.0,
+          ai_analysis TEXT,
+          should_activate_chat INTEGER DEFAULT 0,
+          chat_activated_at INTEGER,
+          activation_reason TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (customer_id, session_id)
+        )`
+      )
+      .run();
+    console.log('[ANALYTICS_WORKER] ✅ Table customer_sessions ensured');
+  } catch (err) {
+    console.error('[ANALYTICS_WORKER] ❌ Failed to create customer_sessions table:', err);
+    throw err;
+  }
 
   // Create indexes for customer_sessions (matching schema-customer-sessions.sql)
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_customer_id ON customer_sessions(customer_id)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_session_id ON customer_sessions(session_id)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_should_activate ON customer_sessions(should_activate_chat, chat_activated_at) WHERE should_activate_chat = 1 AND chat_activated_at IS NULL`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_last_event ON customer_sessions(last_event_at DESC)`).run().catch(() => {});
+  console.log('[ANALYTICS_WORKER] 🔧 Creating customer_sessions indexes...');
+  try {
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_customer_id ON customer_sessions(customer_id)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_session_id ON customer_sessions(session_id)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_should_activate ON customer_sessions(should_activate_chat, chat_activated_at) WHERE should_activate_chat = 1 AND chat_activated_at IS NULL`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_sessions_last_event ON customer_sessions(last_event_at DESC)`).run();
+    console.log('[ANALYTICS_WORKER] ✅ customer_sessions indexes created');
+  } catch (err) {
+    console.warn('[ANALYTICS_WORKER] ⚠️ Failed to create some customer_sessions indexes:', err);
+  }
 }
 
 async function ensureCustomerEventsTable(db: D1Database): Promise<void> {
+  console.log('[ANALYTICS_WORKER] 🔧 Ensuring customer_events table exists...');
+  
   // Create customer_events table matching schema-events.sql
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS customer_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        customer_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        event_timestamp INTEGER NOT NULL,
-        event_data TEXT,
-        page_url TEXT,
-        page_title TEXT,
-        referrer TEXT,
-        product_id TEXT,
-        product_title TEXT,
-        product_price REAL,
-        variant_id TEXT,
-        cart_token TEXT,
-        cart_total REAL,
-        user_agent TEXT,
-        ip_address TEXT,
-        created_at INTEGER NOT NULL
-      )`
-    )
-    .run()
-    .catch(() => {});
+  try {
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS customer_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          customer_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          event_timestamp INTEGER NOT NULL,
+          event_data TEXT,
+          page_url TEXT,
+          page_title TEXT,
+          referrer TEXT,
+          product_id TEXT,
+          product_title TEXT,
+          product_price REAL,
+          variant_id TEXT,
+          cart_token TEXT,
+          cart_total REAL,
+          user_agent TEXT,
+          ip_address TEXT,
+          created_at INTEGER NOT NULL
+        )`
+      )
+      .run();
+    console.log('[ANALYTICS_WORKER] ✅ Table customer_events ensured');
+  } catch (err) {
+    console.error('[ANALYTICS_WORKER] ❌ Failed to create customer_events table:', err);
+    throw err;
+  }
 
   // Create indexes for customer_events (matching schema-events.sql)
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_customer_id ON customer_events(customer_id, event_timestamp DESC)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_session_id ON customer_events(session_id, event_timestamp DESC)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_event_type ON customer_events(event_type, event_timestamp DESC)`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_product_id ON customer_events(product_id, event_timestamp DESC) WHERE product_id IS NOT NULL`).run().catch(() => {});
-  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_timestamp ON customer_events(event_timestamp DESC)`).run().catch(() => {});
+  console.log('[ANALYTICS_WORKER] 🔧 Creating customer_events indexes...');
+  try {
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_customer_id ON customer_events(customer_id, event_timestamp DESC)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_session_id ON customer_events(session_id, event_timestamp DESC)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_event_type ON customer_events(event_type, event_timestamp DESC)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_product_id ON customer_events(product_id, event_timestamp DESC) WHERE product_id IS NOT NULL`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_customer_events_timestamp ON customer_events(event_timestamp DESC)`).run();
+    console.log('[ANALYTICS_WORKER] ✅ customer_events indexes created');
+  } catch (err) {
+    console.warn('[ANALYTICS_WORKER] ⚠️ Failed to create some customer_events indexes:', err);
+  }
 }
 
 async function insertCustomerEvent(
@@ -390,10 +429,21 @@ async function markChatActivated(
 }
 
 async function handlePixelPost(request: Request, env: Env): Promise<Response> {
-  const body = (await request.json().catch(() => null)) as { type?: string; data?: unknown } | null;
+  console.log('[ANALYTICS_WORKER] 📥 Received POST /pixel request');
+  
+  const body = (await request.json().catch((err) => {
+    console.error('[ANALYTICS_WORKER] ❌ Failed to parse request body:', err);
+    return null;
+  })) as { type?: string; data?: unknown } | null;
+  
   if (!body || typeof body.type !== 'string') {
+    console.error('[ANALYTICS_WORKER] ❌ Invalid payload - body:', body);
     return json({ ok: false, error: 'Invalid payload' }, 400);
   }
+  
+  console.log('[ANALYTICS_WORKER] 📊 Event type:', body.type);
+  console.log('[ANALYTICS_WORKER] 📊 Event data keys:', body.data && typeof body.data === 'object' ? Object.keys(body.data) : 'none');
+  
   await ensurePixelTable(env.DB);
   
   try {
@@ -661,8 +711,18 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     // Store full event as JSON for debugging
     const eventJson = JSON.stringify({ event: eventType, data: eventData, timestamp });
     
+    console.log('[ANALYTICS_WORKER] 💾 Preparing INSERT with values:', {
+      eventType,
+      customerId,
+      sessionId,
+      productId,
+      cartId,
+      pageUrl,
+      timestamp
+    });
+    
     // Insert with structured columns (v3 schema with heatmap fields)
-    await env.DB.prepare(
+    const insertResult = await env.DB.prepare(
       `INSERT INTO pixel_events (
         event_type, event_name, event_data, created_at,
         customer_id, session_id,
@@ -712,6 +772,10 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
       mouseX, mouseY
     )
     .run();
+    
+    console.log('[ANALYTICS_WORKER] ✅ INSERT successful, result:', insertResult);
+    console.log('[ANALYTICS_WORKER] 📊 Rows affected:', insertResult.meta?.changes || 0);
+    console.log('[ANALYTICS_WORKER] 📊 Last inserted ID:', insertResult.meta?.last_row_id || 'unknown');
     
     // ============================================================================
     // CUSTOMER SESSION TRACKING & AI ANALYSIS
@@ -820,13 +884,26 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     // ============================================================================
     // RESPONSE: Return activation flag to Web Pixel (Best Practice: push over pull)
     // ============================================================================
+    console.log('[ANALYTICS_WORKER] ✅ Event processing complete:', {
+      eventType,
+      activateChat,
+      customerId,
+      sessionId
+    });
+    
     return json({ 
       ok: true, 
       activate_chat: activateChat,
       reason: activateChat ? 'high_engagement_score' : null
     }, 200);
   } catch (e) {
-    console.error('[ANALYTICS_WORKER] ❌ Insert failed:', e);
+    console.error('[ANALYTICS_WORKER] ❌ Insert failed with error:', e);
+    console.error('[ANALYTICS_WORKER] ❌ Error details:', {
+      message: e instanceof Error ? e.message : String(e),
+      stack: e instanceof Error ? e.stack : undefined,
+      eventType: body.type
+    });
+    // Don't expose internal error details to the client for security reasons
     return json({ ok: false, error: 'insert_failed' }, 500);
   }
 }
