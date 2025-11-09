@@ -1,0 +1,1 @@
+Zmiany w PR dotyczą wyłącznie analytics-worker zgodnie z README.md. Architekturę eventów pixel i zapis do D1 realizuje dedykowany worker, cała logika sesji/chat AI jest rozdzielona i niezmieniona. Testy oraz logika diagnostyczna są prawidłowe. Akceptuję PR!
