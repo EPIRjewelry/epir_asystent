@@ -793,7 +793,8 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
       stack: e instanceof Error ? e.stack : undefined,
       eventType: body.type
     });
-    return json({ ok: false, error: 'insert_failed', details: e instanceof Error ? e.message : String(e) }, 500);
+    // Don't expose internal error details to the client for security reasons
+    return json({ ok: false, error: 'insert_failed' }, 500);
   }
 }
 
