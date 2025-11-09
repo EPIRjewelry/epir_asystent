@@ -1,6 +1,6 @@
 import {register} from "@shopify/web-pixels-extension";
 
-register(async ({ analytics, browser, init }) => {
+register(async ({ analytics, browser, init, settings }) => {
     // ============================================================================
     // CUSTOMER & SESSION TRACKING
     // ============================================================================
@@ -20,8 +20,16 @@ register(async ({ analytics, browser, init }) => {
       sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     }
     
+    // ============================================================================
+    // ANALYTICS URL CONFIGURATION
+    // ============================================================================
+    // Get analytics URL from extension settings (configured in Shopify Admin)
+    // Fallback to production URL if not configured
+    const analyticsUrl = (settings as any)?.analyticsUrl || 'https://asystent.epirbizuteria.pl/pixel';
+    
     console.log('[EPIR Pixel] Customer ID:', customerId || 'anonymous');
     console.log('[EPIR Pixel] Session ID:', sessionId);
+    console.log('[EPIR Pixel] Analytics URL:', analyticsUrl);
     
     // ============================================================================
     // Event Sending Function
@@ -41,7 +49,8 @@ register(async ({ analytics, browser, init }) => {
           sessionId: sessionId
         };
         
-        const response = await fetch('/pixel', {
+        // Use configured analytics URL (full URL to worker, not relative path)
+        const response = await fetch(analyticsUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: eventType, data: enrichedData })
