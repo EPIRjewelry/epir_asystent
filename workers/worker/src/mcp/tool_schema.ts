@@ -93,6 +93,29 @@ const searchPoliciesSchema = {
 };
 
 /**
+ * Definicja parametrów dla funkcji get_order_status.
+ */
+const getOrderStatusSchema = {
+  type: "object",
+  properties: {
+    order_id: {
+      type: "string",
+      description: "ID zamówienia do sprawdzenia (np. 'gid://shopify/Order/123456789' lub numer zamówienia)."
+    }
+  },
+  required: ["order_id"]
+};
+
+/**
+ * Definicja parametrów dla funkcji get_most_recent_order_status.
+ */
+const getMostRecentOrderStatusSchema = {
+  type: "object",
+  description: "Pobiera status ostatniego zamówienia dla bieżącego klienta. Nie wymaga parametrów.",
+  properties: {}
+};
+
+/**
  * Generuje pełny schemat narzędzi MCP w formacie JSON zgodnym ze specyfikacją Function Calling/Tool Use.
  * @returns Pełny schemat JSON jako string.
  */
@@ -130,6 +153,22 @@ export function generateMcpToolSchema(): string {
         parameters: searchPoliciesSchema
       }
     },
+    {
+      type: "function",
+      function: {
+        name: "get_order_status",
+        description: "Pobiera status i szczegóły konkretnego zamówienia po jego ID.",
+        parameters: getOrderStatusSchema
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_most_recent_order_status",
+        description: "Pobiera status ostatniego zamówienia dla bieżącego klienta.",
+        parameters: getMostRecentOrderStatusSchema
+      }
+    }
   ];
 
   // Zwracamy string JSON dla łatwego wstrzyknięcia do promptu LLM
