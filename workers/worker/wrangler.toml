@@ -23,9 +23,6 @@ database_id = "6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23"
 binding = "SESSIONS_KV"
 id = "08f16276a9b14ca7b3c00404e8e8d0d9"
 
-[[vectorize]]
-binding = "VECTOR_INDEX"
-index_name = "autorag-epir-chatbot-rag"
 
 # Queues require paid plan - commented out for now
 # [[queues.producers]]
