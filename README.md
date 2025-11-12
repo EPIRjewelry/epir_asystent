@@ -791,3 +791,32 @@ For questions about:
 
 **Last Updated:** November 7, 2025  
 **Architecture Version:** 2.0 (Microservices + Structured Tracking)
+
+---
+
+## 🛠️ Recent changes & priorities (12-11-2025)
+
+Ten projekt jest aktywnie utrzymywany — poniżej znajdują się najnowsze zmiany i priorytety, które zostały wprowadzone lokalnie oraz wdrożone na cloudflare workerze (wersja z dnia 2025-11-12):
+
+- Poprawka typowania TypeScript
+  - Plik: `workers/worker/src/security.ts`
+  - Opis: Zmieniono sygnaturę `verifyAppProxyHmac` na `Request<any, any>` aby zgadzać się z typami Cloudflare (`Request<CfHostMetadata, Cf>`) i wyeliminować błąd kompilacji TS2345. Zmiana nie modyfikuje logiki weryfikacji HMAC — tylko sygnaturę typu.
+
+- Mitigacja hardkodowanego MCP endpoint (runtime resolution)
+  - Plik: `workers/worker/src/rag.ts` (lokalnie zmodyfikowany)
+  - Opis: Usunięto użycie kanonicznego, jawnie zakodowanego `CANONICAL_MCP_URL`. Zaimplementowano preferencję: najpierw próbuj worker-proxy / lokalnego end-pointu narzędzi MCP, a dopiero potem bezpośredni sklep (shop storefront MCP) jako fallback. Dodano debug logging pokazujący, które URL-e były próbowane oraz status odpowiedzi — ułatwi to śledzenie, dlaczego zapisy wiedzy (Knowledge Base) mogły nie być widoczne.
+
+- Wdrożenie
+  - Worker: `epir-art-jewellery-worker` został wdrożony (Current Version ID: e3a06b22-0c6b-42ac-8f79-b0ce943f6f43).
+  - Akcja: Po poprawce typowania uruchomiono `npx tsc --noEmit` (kompilacja: PASS) i `wrangler deploy` (deploy: PASS).
+
+- Priorytety krótkoterminowe
+  1. Sprawdzić runtime logs (`wrangler tail`) i potwierdzić, że zapisy do DO/D1 występują przy rzeczywistych requestach App Proxy.
+  2. Dodać integracyjne testy symulujące MCP 429/5xx aby upewnić się, że fallback i retry działają poprawnie.
+  3. Utworzyć PR z tymi drobnymi poprawkami (typy + dokumentacja) i krótkim changelogiem dla zespołu.
+
+- Next steps (zalecane)
+  - Uruchomić tail logów i przeprowadzić kontrolowane testy frontendowe (wywołania App Proxy → worker) aby zweryfikować, czy interakcje czatu są zapisywane w KB/D1.
+  - Jeśli logi pokażą brak zapisu, zbadać: autoryzację MCP (tokeny), 429/ratelimit oraz zmiany commitów z końca października 2025 (które wcześniej wprowadziły kanoniczny endpoint).
+
+Jeśli chcesz, mogę od razu uruchomić tail logów i zebrać pierwsze dowody (kilka próbek SSE / MCP callów). Możemy też przygotować PR z tą dokumentacją i kodowymi poprawkami.
