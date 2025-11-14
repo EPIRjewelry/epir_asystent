@@ -220,6 +220,27 @@ export class SessionDO {
          }
          return new Response('Bad Request', { status: 400 });
     }
+
+    // POST /set-customer - attach/update recognized customer info for this session
+    if (method === 'POST' && pathname.endsWith('/set-customer')) {
+      const payload = (await request.json().catch(() => null)) as { customer_id?: string; first_name?: string; last_name?: string } | null;
+      if (!payload || !payload.customer_id) {
+        return new Response('Bad Request: customer_id required', { status: 400 });
+      }
+      const customer = {
+        customer_id: payload.customer_id,
+        first_name: payload.first_name || null,
+        last_name: payload.last_name || null,
+      };
+      await this.state.storage.put('customer', customer);
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // GET /customer - retrieve known customer info for this session
+    if (method === 'GET' && pathname.endsWith('/customer')) {
+      const customer = await this.state.storage.get('customer');
+      return new Response(JSON.stringify({ customer: customer ?? null }), { headers: { 'Content-Type': 'application/json' } });
+    }
     
     // GET /cart-id
     if (method === 'GET' && pathname.endsWith('/cart-id')) {
@@ -370,6 +391,25 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     }
   } else {
     console.log('[handleChat] ⚠️ TokenVault: SKIPPED (customer not logged in or missing shop)');
+  }
+
+  // (Optional) If we recognized customerId, fetch customer profile (firstName) and store to SessionDO.
+  if (customerId && stub) {
+    try {
+      // Call a helper in shopify-mcp-client to fetch firstName and lastName
+      const { getCustomerById } = await import('./shopify-mcp-client');
+      const customer = await getCustomerById(env, customerId);
+      if (customer && (customer.firstName || customer.lastName)) {
+        await stub.fetch('https://session/set-customer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customer_id: customerId, first_name: customer.firstName, last_name: customer.lastName }),
+        });
+        console.log('[handleChat] SessionDO: set customer for session:', customerId);
+      }
+    } catch (e) {
+      console.warn('[handleChat] Unable to fetch/store customer profile:', e);
+    }
   }
   
   // 🔴 POPRAWKA SESJI: Używamy `payload.session_id` LUB generujemy nowy
@@ -550,9 +590,17 @@ async function streamAssistantResponse(
           if (done) break;
 
           switch (event.type) {
-            case 'text':
-              iterationText += event.delta;
-              await sendDelta(event.delta);
+              case 'text':
+                // Buforujemy tekst z AI zamiast wysyłać go do klienta natychmiast.
+                // Powód: model może prefiksować <|call|> wyjaśnieniami ("myśli"),
+                // a `createHarmonyTransform` emituje część tekstu przed tokenem.
+                // Aby uniknąć wyświetlania „myśli” użytkownikowi, akumulujemy
+                // wszystkie fragmenty `text` w `iterationText` i wysyłamy je
+                // dopiero PO potwierdzeniu, że nie było wywołania narzędzia
+                // w tej iteracji. Jeśli wykryjemy `tool_call`, te "myśli"
+                // zostaną pominięte (nie wyświetlimy ich), co zapobiega
+                // ujawnianiu wewnętrznych rozważań modelu.
+                iterationText += event.delta;
               break;
 
             case 'tool_call':
@@ -616,9 +664,13 @@ async function streamAssistantResponse(
           continue; 
 
         } else {
-          // NIE - To była finalna odpowiedź tekstowa
-          // 🔴 FIX: Zachowaj tekst z tej iteracji
+          // NIE - To była finalna odpowiedź tekstowa (bez wywołań narzędzi)
+          // Wysyłamy akumulowany tekst do klienta i ustawiamy jako finalny.
           finalTextResponse = iterationText;
+          if (iterationText) {
+            // Prześlij cały tekst tej iteracji (delta) do klienta w jednym evencie.
+            await sendDelta(iterationText);
+          }
           break; // Wyjdź z pętli for
         }
       } // koniec for(MAX_TOOL_CALLS)

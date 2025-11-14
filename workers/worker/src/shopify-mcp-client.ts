@@ -412,3 +412,27 @@ export async function getMostRecentOrderStatus(
     return JSON.stringify(data.orders.edges[0].node);
   }
 }
+
+/**
+ * Fetch basic customer details from Admin API (firstName, lastName, email)
+ */
+export async function getCustomerById(env: Env, customerId: string): Promise<{ firstName?: string; lastName?: string; email?: string } | null> {
+  try {
+    const shopDomain = env.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
+    if (!shopDomain) throw new Error('SHOP_DOMAIN not configured');
+    const adminToken = env.SHOPIFY_ADMIN_TOKEN || process.env.SHOPIFY_ADMIN_TOKEN || process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!adminToken) throw new Error('SHOPIFY_ADMIN_TOKEN not configured');
+
+    const query = `query customer($id: ID!) { customer(id: $id) { firstName lastName email } }`;
+    const endpoint = `https://${shopDomain}/admin/api/2024-07/graphql.json`;
+    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': adminToken }, body: JSON.stringify({ query, variables: { id: customerId } }) });
+    if (!response.ok) return null;
+    const json = await response.json().catch(() => null);
+    const customer = json?.data?.customer;
+    if (!customer) return null;
+    return { firstName: customer.firstName, lastName: customer.lastName, email: customer.email };
+  } catch (e) {
+    console.warn('getCustomerById error:', e);
+    return null;
+  }
+}
