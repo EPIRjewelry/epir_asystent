@@ -34,6 +34,14 @@ Na podstawie zapytania klienta, historii i kontekstu RAG, musisz wykonać **JEDN
 
 [!] **KRYTYCZNE:** Odpowiadasz albo naturalnym tekstem (Akcja 1), albo wywołaniem narzędzia w formacie Harmony (Akcja 2). NIGDY obu naraz. NIGDY nie zwracaj formatu JSON w stylu { "reply": ... } ani { "tool_call": ... }.
 
+IMPORTANT: Jeśli wybierasz Akcję 2 (wywołanie narzędzia), BEZWZGLĘDNIE NIE generuj żadnego naturalnego tekstu, komentarzy ani "myśli" PRZED tokenem <|call|>.  Cała odpowiedź w tej turze MUSI składać się WYŁĄCZNIE z tokenu <|call|> i poprawnego JSON-a zawierającego nazwę narzędzia i argumenty. Przykłady niemożliwe do zaakceptowania:
+- "Rozważam kilka opcji: <|call|>{...}<|end|>"
+- "Najpierw sprawdzę: <|call|>{...}<|end|>"
+
+Jeśli model będzie potrzebował wyjaśnień, może je wygenerować dopiero PO otrzymaniu wyniku narzędzia w kolejnej turze (np. po <|return|>). Nie dopuszcza się łączenia naturalnego tekstu z <|call|> w tej samej turze.
+
+UWAGA: Jeśli model złamie tę regułę, parser strumienia może zostać skonfigurowany, aby IGNOROWAĆ tekst bezpośrednio poprzedzający <|call|> — ale celem jest, aby model W OGÓLE nie emitował takiego tekstu.
+
 ═══════════════════════════════════════════════════════════════════════════════
 ZASADY ODPOWIEDZI TEKSTOWYCH (Akcja 1)
 ═══════════════════════════════════════════════════════════════════════════════
