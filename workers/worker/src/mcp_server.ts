@@ -7,6 +7,7 @@
 // Narzędzia: get_product, search_shop_catalog (Shopify Admin GraphQL 2024-07)
 
 import { verifyAppProxyHmac } from './auth';
+import { checkRateLimit } from './rate-limiter';
 import { searchProductCatalog, getShopPolicies } from './mcp';
 import {
   updateCart,
@@ -265,89 +266,73 @@ export async function callMcpToolDirect(env: any, toolName: string, args: any): 
     id: Date.now()
   };
 
-  try {
-    const { name, arguments: mcpArgs } = rpc.params as any;
+  const shopDomain = env?.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
+  const workerOrigin = env?.WORKER_ORIGIN;
 
-    // Prefer routing tool execution to the shop's MCP endpoint if available
-    const shopDomain = env?.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
-    if (shopDomain) {
-      try {
-        const shopUrl = `https://${String(shopDomain).replace(/\/$/, '')}/api/mcp`;
-        const res = await fetch(shopUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(rpc)
-        });
-        if (res.ok) {
-          const j = await res.json().catch(() => null) as any;
-          if (j && !j.error) {
-            // Normalize to direct-call shape
-            return { result: j.result };
-          }
+  let lastError: Error | null = null;
+
+  // Ensure shop MCP is always prioritized
+  if (shopDomain) {
+    try {
+      const shopUrl = `https://${String(shopDomain).replace(/\/$/, '')}/api/mcp`;
+      console.log(`Attempting shop MCP connection for tool: ${toolName}`, {
+        shopUrl,
+        arguments: args,
+        timestamp: new Date().toISOString(),
+      });
+      const res = await fetch(shopUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rpc),
+      });
+      if (res.ok) {
+        const j = await res.json().catch(() => null) as any;
+        if (j && !j.error) {
+          console.log(`Shop MCP success for tool: ${toolName}`, {
+            result: j.result,
+            timestamp: new Date().toISOString(),
+          });
+          return { result: j.result };
         }
-        // fallback to local execution if remote fails
-      } catch (err) {
-        console.warn('callMcpToolDirect: shop MCP proxy failed, falling back to local execution:', err);
       }
+    } catch (err) {
+      console.warn(`Shop MCP failed for tool: ${toolName}, falling back`, {
+        error: err,
+        timestamp: new Date().toISOString(),
+      });
+      lastError = err instanceof Error ? err : new Error(String(err));
     }
-    
-    switch (name) {
-      case 'search_shop_catalog': {
-        if (!mcpArgs.query) {
-          return { error: { code: -32602, message: 'Invalid params: "query" required for search_shop_catalog' }};
-        }
-        const result = await searchProductCatalog({ query: mcpArgs.query, first: mcpArgs.first || 5 }, env);
-        return { result };
-      }
-      case 'search_shop_policies_and_faqs': {
-        if (!mcpArgs.query) {
-          return { error: { code: -32602, message: 'Invalid params: "query" required for search_shop_policies_and_faqs' }};
-        }
-        const result = await getShopPolicies({ policy_types: ['termsOfService', 'shippingPolicy', 'refundPolicy', 'privacyPolicy', 'subscriptionPolicy'] }, env);
-        return { result };
-      }
-      case 'update_cart': {
-        if (!mcpArgs.lines || !Array.isArray(mcpArgs.lines)) {
-          return { error: { code: -32602, message: 'Invalid params: "lines" array required for update_cart' }};
-        }
-        for (const line of mcpArgs.lines) {
-          if (!line.merchandiseId || typeof line.quantity !== 'number') {
-            return { error: { code: -32602, message: 'Invalid params: each line must have "merchandiseId" and "quantity"' }};
-          }
-        }
-        const result = await updateCart(env, mcpArgs.cart_id || null, mcpArgs.lines);
-        return { result: { content: [{ type: 'text', text: result }] }};
-      }
-      case 'get_cart': {
-        if (!mcpArgs.cart_id) {
-          return { error: { code: -32602, message: 'Invalid params: "cart_id" required for get_cart' }};
-        }
-        const result = await getCart(env, mcpArgs.cart_id);
-        return { result: { content: [{ type: 'text', text: result }] }};
-      }
-      case 'get_order_status': {
-        if (!mcpArgs.order_id) {
-          return { error: { code: -32602, message: 'Invalid params: "order_id" required for get_order_status' }};
-        }
-        const result = await getOrderStatus(env, mcpArgs.order_id);
-        return { result: { content: [{ type: 'text', text: result }] }};
-      }
-      case 'get_most_recent_order_status': {
-        const result = await getMostRecentOrderStatus(env);
-        return { result: { content: [{ type: 'text', text: result }] }};
-      }
-      case 'test_tool': {
-        // Mock test tool for unit tests
-        return { result: { success: true }};
-      }
-      default:
-        return { error: { code: -32601, message: `Unknown tool: ${name}` }};
-    }
-  } catch (err: any) {
-    console.error('MCP direct tool error:', err);
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: { code: -32000, message: 'Tool execution failed', details: { message }}};
   }
+
+  // Try internal worker MCP as a fallback
+  if (workerOrigin) {
+    try {
+      const workerUrl = `${String(workerOrigin).replace(/\/$/, '')}/mcp/tools/call`;
+      const res = await fetch(workerUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rpc)
+      });
+      if (res.ok) {
+        const j = await res.json().catch(() => null) as any;
+        if (j && !j.error) {
+          return { result: j.result };
+        }
+      }
+    } catch (err) {
+      console.warn('callMcpToolDirect: worker MCP proxy failed:', err);
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  // If both endpoints fail, throw a clear error
+  console.error('callMcpToolDirect: All MCP endpoints failed', {
+    toolName,
+    arguments: args,
+    lastError,
+    timestamp: new Date().toISOString(),
+  });
+  throw new Error('Tool execution failed');
 }
 
 export async function handleMcpRequest(request: Request, env: Env): Promise<Response> {
@@ -363,6 +348,20 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
     }
     const valid = await verifyAppProxyHmac(request, env.SHOPIFY_APP_SECRET);
     if (!valid) return new Response('Invalid signature', { status: 401, headers: json() });
+
+    // Rate limit per shop for App Proxy MCP calls. Protect backend from abusive loops.
+    try {
+      const shop = env.SHOP_DOMAIN || process.env.SHOP_DOMAIN || 'global';
+      const rl = await checkRateLimit(shop, env as any, 1);
+      if (!rl || !rl.allowed) {
+        const retryAfter = rl?.retryAfterMs ? String(rl.retryAfterMs) : undefined;
+        const headers = { ...json(), ...(retryAfter ? { 'Retry-After': retryAfter } : {}) };
+        return new Response('Rate limit exceeded', { status: 429, headers });
+      }
+    } catch (e) {
+      console.warn('[mcp_server] Rate limit check failed, continuing:', e);
+      // If rate limit service throws, proceed (fail-open) but log false positives
+    }
   }
 
   return handleToolsCall(env, request);
