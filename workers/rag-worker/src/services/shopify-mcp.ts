@@ -11,6 +11,7 @@
  */
 
 import { CANONICAL_MCP_URL, MCP_RETRY_CONFIG, MCP_TOOLS } from '../config/sources';
+import { isString, isRecord, safeJsonParse } from '../utils/json';
 
 /**
  * MCP JSON-RPC 2.0 Request
@@ -44,51 +45,6 @@ interface McpResponse {
     message: string;
     data?: any;
   };
-}
-
-/**
- * Type guard for string
- */
-function isString(v: unknown): v is string {
-  return typeof v === 'string';
-}
-
-/**
- * Type guard for record
- */
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-/**
- * Safe JSON parse with double-encoding support
- * (MCP sometimes returns double-encoded JSON strings)
- */
-function safeJsonParse<T = unknown>(input: unknown): T | unknown {
-  if (!isString(input)) return input;
-  const s = input.trim();
-  if (!s) return input;
-  
-  try {
-    const parsed = JSON.parse(s);
-    // Check for double-encoding
-    if (isString(parsed)) {
-      const inner = parsed.trim();
-      if (
-        (inner.startsWith('{') && inner.endsWith('}')) ||
-        (inner.startsWith('[') && inner.endsWith(']'))
-      ) {
-        try {
-          return JSON.parse(inner);
-        } catch {
-          return parsed;
-        }
-      }
-    }
-    return parsed;
-  } catch {
-    return input;
-  }
 }
 
 /**

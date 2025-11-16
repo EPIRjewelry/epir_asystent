@@ -6,73 +6,13 @@
  * Wymaga tylko SHOPIFY_STOREFRONT_TOKEN jako secret
  */
 
-export interface Env {
+import { adminGraphql, type ShopifyEnv } from './utils/shopify-graphql';
+import { type McpRequest, type McpResponse } from './utils/jsonrpc';
+
+export interface Env extends ShopifyEnv {
   SHOP_DOMAIN?: string;
   SHOPIFY_STOREFRONT_TOKEN?: string;
   SHOPIFY_ADMIN_TOKEN?: string;
-}
-
-interface McpRequest {
-  jsonrpc: '2.0';
-  method: string;
-  params?: any;
-  id: string | number;
-}
-
-interface McpResponse {
-  jsonrpc: '2.0';
-  result?: any;
-  error?: {
-    code: number;
-    message: string;
-    data?: any;
-  };
-  id: string | number;
-}
-
-/**
- * Wykonuje zapytanie GraphQL do Shopify Admin API (fallback gdy MCP nie działa)
- * @param env Env z SHOP_DOMAIN i SHOPIFY_ADMIN_TOKEN
- * @param query Zapytanie GraphQL
- * @param variables Zmienne dla zapytania
- * @returns Obiekt data z odpowiedzi GraphQL
- */
-async function adminGraphql<T = any>(
-  env: Env,
-  query: string,
-  variables?: Record<string, any>
-): Promise<T> {
-  const shopDomain = env.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
-  const adminToken = env.SHOPIFY_ADMIN_TOKEN || process.env.SHOPIFY_ADMIN_TOKEN || process.env.SHOPIFY_ACCESS_TOKEN;
-  
-  if (!shopDomain) {
-    throw new Error('SHOP_DOMAIN not configured in wrangler.toml [vars]');
-  }
-  if (!adminToken) {
-    throw new Error('SHOPIFY_ADMIN_TOKEN not set (use: wrangler secret put SHOPIFY_ADMIN_TOKEN)');
-  }
-
-  const endpoint = `https://${shopDomain}/admin/api/2024-07/graphql.json`;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': adminToken
-    },
-    body: JSON.stringify({ query, variables })
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>');
-    throw new Error(`Shopify GraphQL ${response.status}: ${text}`);
-  }
-
-  const data = (await response.json().catch(() => ({}))) as any;
-  if (data?.errors) {
-    throw new Error(`Shopify GraphQL errors: ${JSON.stringify(data.errors)}`);
-  }
-
-  return data.data as T;
 }
 
 /**
