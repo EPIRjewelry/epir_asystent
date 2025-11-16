@@ -11,41 +11,8 @@
  */
 
 import { CANONICAL_MCP_URL, MCP_RETRY_CONFIG, MCP_TOOLS } from '../config/sources';
-import { isString, isRecord, safeJsonParse } from '../utils/json';
-
-/**
- * MCP JSON-RPC 2.0 Request
- */
-interface McpRequest {
-  jsonrpc: '2.0';
-  method: 'tools/call';
-  params: {
-    name: string;
-    arguments: Record<string, any>;
-  };
-  id: number;
-}
-
-/**
- * MCP JSON-RPC 2.0 Response
- */
-interface McpResponse {
-  jsonrpc?: '2.0';
-  id?: number;
-  result?: {
-    content?: Array<{
-      type: string;
-      text?: string;
-      title?: string;
-      [key: string]: any;
-    }>;
-  };
-  error?: {
-    code: number;
-    message: string;
-    data?: any;
-  };
-}
+import { isString, isRecord } from '../utils/json';
+import { callMcpWithRetry, extractMcpTextContent } from '../utils/mcp-client';
 
 /**
  * Call Shopify MCP tool with retry logic
@@ -66,102 +33,7 @@ export async function callShopifyMcp(
   toolName: string,
   args: Record<string, any>
 ): Promise<any> {
-  const payload: McpRequest = {
-    jsonrpc: '2.0',
-    method: 'tools/call',
-    params: {
-      name: toolName,
-      arguments: args,
-    },
-    id: Date.now(),
-  };
-
-  console.log(`[MCP] 📤 Calling tool: ${toolName}`, args);
-
-  // Retry loop with exponential backoff
-  for (let attempt = 0; attempt < MCP_RETRY_CONFIG.MAX_ATTEMPTS; attempt++) {
-    try {
-      const res = await fetch(CANONICAL_MCP_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      // Handle rate limiting (429)
-      if (res.status === 429) {
-        const backoff = Math.min(
-          MCP_RETRY_CONFIG.INITIAL_BACKOFF_MS * (2 ** attempt),
-          MCP_RETRY_CONFIG.MAX_BACKOFF_MS
-        );
-        console.warn(`[MCP] ⚠️ Rate limited (429), retrying in ${backoff}ms...`);
-        await new Promise(resolve => setTimeout(resolve, backoff));
-        continue;
-      }
-
-      // Handle other HTTP errors
-      if (!res.ok) {
-        const errorText = await res.text().catch(() => '<no body>');
-        console.error(`[MCP] ❌ HTTP ${res.status}:`, errorText);
-        
-        if (attempt < MCP_RETRY_CONFIG.MAX_ATTEMPTS - 1) {
-          const backoff = MCP_RETRY_CONFIG.INITIAL_BACKOFF_MS * (2 ** attempt);
-          await new Promise(resolve => setTimeout(resolve, backoff));
-          continue;
-        }
-        
-        return null;
-      }
-
-      // Parse response
-      let response: unknown = await res.json().catch(() => null);
-      
-      // Handle double-encoded JSON
-      if (isString(response)) {
-        response = safeJsonParse(response);
-      }
-
-      if (!isRecord(response)) {
-        console.error('[MCP] ❌ Invalid response format');
-        return null;
-      }
-
-      const mcpResponse = response as McpResponse;
-
-      // Check for JSON-RPC error
-      if (mcpResponse.error) {
-        console.error('[MCP] ❌ RPC Error:', mcpResponse.error);
-        return null;
-      }
-
-      // Extract result
-      const result = mcpResponse.result;
-      if (!result) {
-        console.warn('[MCP] ⚠️ Empty result');
-        return null;
-      }
-
-      console.log(`[MCP] ✅ Tool ${toolName} succeeded`);
-      
-      // Handle double-encoded result
-      if (isString(result)) {
-        return safeJsonParse(result);
-      }
-
-      return result;
-
-    } catch (err) {
-      console.error(`[MCP] ❌ Attempt ${attempt + 1} failed:`, err);
-      
-      if (attempt < MCP_RETRY_CONFIG.MAX_ATTEMPTS - 1) {
-        const backoff = MCP_RETRY_CONFIG.INITIAL_BACKOFF_MS * (2 ** attempt);
-        await new Promise(resolve => setTimeout(resolve, backoff));
-      } else {
-        return null;
-      }
-    }
-  }
-
-  return null;
+  return callMcpWithRetry(CANONICAL_MCP_URL, toolName, args, MCP_RETRY_CONFIG);
 }
 
 /**
@@ -176,20 +48,7 @@ export async function searchProducts(
     context,
   });
 
-  if (!result) return '';
-
-  // Extract text from MCP content array
-  if (isRecord(result) && Array.isArray(result.content)) {
-    const textContent = result.content
-      .filter((c: any) => c.type === 'text' && typeof c.text === 'string')
-      .map((c: any) => c.text)
-      .join('\n');
-    
-    return textContent || '';
-  }
-
-  // Fallback: stringify result
-  return typeof result === 'string' ? result : JSON.stringify(result);
+  return extractMcpTextContent(result);
 }
 
 /**
