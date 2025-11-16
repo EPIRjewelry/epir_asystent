@@ -11,6 +11,7 @@
  */
 
 import { callMcpToolDirect } from './mcp_server';
+import { isString, isRecord, safeJsonParse, asStringField } from './utils/json';
 
 // Kanoniczny, hardcoded endpoint MCP sklepu (wymagane):
 const CANONICAL_MCP_URL = 'https://epir-art-silver-jewellery.myshopify.com/api/mcp';
@@ -48,50 +49,10 @@ export type RagContext = {
   retrieved_docs: RagDoc[];
 };
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function isString(v: unknown): v is string {
-  return typeof v === 'string';
-}
-
-// Safe JSON parse with graceful fallback; also unwraps double-encoded JSON strings
-function safeJsonParse<T = unknown>(input: unknown): T | unknown {
-  if (!isString(input)) return input;
-  const s = input.trim();
-  if (!s) return input;
-  try {
-    const parsed = JSON.parse(s);
-    // If parsed itself is a quoted JSON string, try one more time (double-encoded)
-    if (isString(parsed)) {
-      const inner = parsed.trim();
-      if ((inner.startsWith('{') && inner.endsWith('}')) || (inner.startsWith('[') && inner.endsWith(']')) || (inner.startsWith('"') && inner.endsWith('"'))) {
-        try {
-          return JSON.parse(inner);
-        } catch {
-          return parsed;
-        }
-      }
-    }
-    return parsed;
-  } catch {
-    return input;
-  }
-}
-
 // Minimal types for MCP JSON-RPC responses used in this module
 type McpContentItem = { type: string; text?: string; title?: string; [k: string]: unknown };
 type McpResult = { content?: McpContentItem[] };
 type McpJsonRpc = { error?: unknown; result?: McpResult } & Record<string, unknown>;
-
-function asStringField(obj: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const k of keys) {
-    const val = obj[k];
-    if (isString(val) && val.trim().length > 0) return val.trim();
-  }
-  return undefined;
-}
 
 function normalizeSingleDoc(raw: unknown): RagDoc | null {
   if (!isRecord(raw)) return null;

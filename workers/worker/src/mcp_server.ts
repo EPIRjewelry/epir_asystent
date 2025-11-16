@@ -15,67 +15,29 @@ import {
   getOrderStatus,
   getMostRecentOrderStatus
 } from './shopify-mcp-client';
+import { adminGraphql } from './utils/shopify-graphql';
+import { 
+  type JsonRpcRequest, 
+  type JsonRpcResponse,
+  createJsonRpcSuccess,
+  createJsonRpcError 
+} from './utils/jsonrpc';
 import type { Env } from './index';
 
 type JsonRpcId = string | number | null;
-
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  method: string;
-  params?: any;
-  id?: JsonRpcId;
-}
-
-interface JsonRpcSuccess {
-  jsonrpc: '2.0';
-  result: any;
-  id: JsonRpcId;
-}
-
-interface JsonRpcError {
-  jsonrpc: '2.0';
-  error: { code: number; message: string; data?: any };
-  id: JsonRpcId;
-}
 
 function json(headers: HeadersInit = {}) {
   return { 'Content-Type': 'application/json', ...headers };
 }
 
 function rpcResult(id: JsonRpcId, result: any): Response {
-  const body: JsonRpcSuccess = { jsonrpc: '2.0', result, id: id ?? null };
+  const body = createJsonRpcSuccess(id ?? 0, result);
   return new Response(JSON.stringify(body), { status: 200, headers: json() });
 }
 
 function rpcError(id: JsonRpcId, code: number, message: string, data?: any): Response {
-  const body: JsonRpcError = { jsonrpc: '2.0', error: { code, message, data }, id: id ?? null };
+  const body = createJsonRpcError(id ?? 0, code, message, data);
   return new Response(JSON.stringify(body), { status: 200, headers: json() });
-}
-
-async function adminGraphql<T = any>(env: Env, query: string, variables?: Record<string, any>): Promise<T> {
-  if (!env.SHOP_DOMAIN) throw new Error('Brak SHOP_DOMAIN (ustaw w wrangler.toml [vars])');
-  if (!env.SHOPIFY_ADMIN_TOKEN) throw new Error('Brak SHOPIFY_ADMIN_TOKEN (ustaw przez wrangler secret put)');
-
-  const endpoint = `https://${env.SHOP_DOMAIN}/admin/api/2024-07/graphql.json`;
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': env.SHOPIFY_ADMIN_TOKEN
-    },
-    body: JSON.stringify({ query, variables })
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '<no body>');
-    throw new Error(`Shopify GraphQL ${res.status}: ${txt}`);
-  }
-
-  const data = await res.json().catch(() => ({})) as any;
-  if (data?.errors) {
-    throw new Error(`Shopify GraphQL errors: ${JSON.stringify(data.errors)}`);
-  }
-  return data.data as T;
 }
 
 async function toolGetProduct(env: Env, args: any) {
