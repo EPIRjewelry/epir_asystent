@@ -33,19 +33,14 @@ export async function getShopifyCartId() {
     
     return null;
   } catch (err) {
-    console.error('Błąd czatu:', err);
-    reportUiExtensionError(err, {
-      stage: 'chat_execution',
-      user_message_len: text.length,
-      render_mode: renderMode,
-    });
-    const safeMsg = err instanceof Error ? err.message : 'Nieznany błąd.';
-    const finalText = accumulated.length > 0 ? `${accumulated} (Błąd: ${safeMsg})` : 'Przepraszam, wystąpił błąd. Spróbuj ponownie.';
-    updateAssistantMessage(msgId, finalText);
-    const el = document.getElementById(msgId);
-    if (el) el.classList.add('msg-error');
+    // W getShopifyCartId() nie mamy kontekstu wiadomości (message id) ani renderMode.
+    // Zgłaszamy błąd do Analytics i zwracamy null, aby chat mógł kontynuować.
+    console.error('[Assistant] getShopifyCartId error', err);
+    try { reportUiExtensionError(err, { stage: 'get_cart_id' }); } catch (e) { console.warn('reportUiExtensionError failed', e); }
+    return null;
   } finally {
- * Zwraca obiekt z parsed text + extracted actions
+  // kończymy getShopifyCartId()
+}
  */
 export function parseAssistantResponse(text) {
   const actions = {
@@ -82,10 +77,8 @@ export function parseAssistantResponse(text) {
     } catch (e) {
       console.warn('Failed to parse order details:', e);
     }
+
     cleanedText = cleanedText.replace(/\[ORDER_STATUS:[^\]]+\]/, '').trim();
-          const serverError = new Error(`Serwer zwrócił błąd (${res.status}).`);
-          reportUiExtensionError(serverError, { stage: 'http_response', status: res.status, response_body: errText.slice(0, 500) });
-          throw serverError;
   
   return { text: cleanedText, actions };
 }
