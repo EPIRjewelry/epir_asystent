@@ -1,9 +1,255 @@
 # Naprawa Błędu Deploy - Web Pixel Extension
 
 **Data:** 2025-11-17  
-**Commit:** ed9bccc (POPRAWIONY)  
-**Poprzedni commit:** 37c0514 (BŁĘDNY - usunięty)  
+**Status:** W TRAKCIE TESTOWANIA  
+**Commits:** 37c0514 (błędny), ed9bccc (błędny), 784311b (nowa próba)
 **Problem:** Błąd bundlingu podczas `shopify app deploy`
+
+---
+
+## 🐛 Błąd
+
+Podczas wykonywania `shopify app deploy` wystąpił błąd:
+
+```
+my-web-pixel │ Bundling UI extension my-web-pixel...
+
+X [ERROR] Could not resolve "@shopify/web-pixels-extension"
+
+    extensions/my-web-pixel/src/index.ts:1:23:
+      1 │ import {register} from "@shopify/web-pixels-extension";
+        ╵                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "@shopify/web-pixels-extension" as external to exclude it from the bundle,
+  which will remove this error and leave the unresolved path in the bundle.
+
+╭─ error ──────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  Failed to bundle extension my-web-pixel. Please check the extension source  │
+│   code for errors.                                                           │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+---
+
+## 🔄 Historia Prób Naprawy
+
+### ❌ Próba 1: extension.config.js (Commit 37c0514)
+
+**Co zrobiono:**
+```javascript
+// extensions/my-web-pixel/extension.config.js
+module.exports = {
+  build: {
+    external: ['@shopify/web-pixels-extension']
+  }
+};
+```
+
+**Wynik:** NIE ZADZIAŁAŁO - Shopify CLI nie rozpoznaje tego pliku.
+
+---
+
+### ❌ Próba 2: shopify.extension.toml [build] (Commit ed9bccc)
+
+**Co zrobiono:**
+```toml
+[build]
+command = ""
+
+[[build.external]]
+path = "@shopify/web-pixels-extension"
+```
+
+**Wynik:** NIE ZADZIAŁAŁO - Ta składnia TOML nie jest wspierana lub nie działa dla tej wersji CLI.
+
+---
+
+### 🔄 Próba 3: peerDependencies (Commit 784311b) - W TRAKCIE TESTOWANIA
+
+**Co zrobiono:**
+
+Zmieniono `package.json`:
+
+```json
+{
+  "name": "my-web-pixel",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "@shopify/web-pixels-extension": "*"
+  }
+}
+```
+
+**Przywrócono** `shopify.extension.toml` do oryginalnego stanu (bez sekcji [build]).
+
+**Dlaczego to może zadziałać:**
+
+1. **peerDependencies** to standardowy mechanizm npm/yarn informujący bundlery że pakiet będzie dostarczony externally
+2. Większość bundlerów (webpack, rollup, esbuild) **automatycznie** traktuje peerDependencies jako external
+3. To jest bardziej standardowe i portable rozwiązanie niż custom config files
+4. Shopify runtime dostarcza `@shopify/web-pixels-extension`, więc deklaracja jako peer dependency jest semantycznie poprawna
+
+**Mechanizm:**
+```
+package.json (peerDependencies) → Bundler wykrywa → Automatycznie external → Brak bundlowania
+```
+
+---
+
+## 📚 Dokumentacja Techniczna
+
+### Co to są peerDependencies?
+
+`peerDependencies` w `package.json` służą do deklarowania zależności które:
+1. Są wymagane do działania pakietu
+2. Ale **nie powinny być** bundlowane razem z kodem
+3. Będą dostarczone przez environment/runtime/host application
+
+### Przykład z Naszego Przypadku:
+
+```json
+{
+  "peerDependencies": {
+    "@shopify/web-pixels-extension": "*"
+  }
+}
+```
+
+Oznacza:
+- "Ten pakiet wymaga `@shopify/web-pixels-extension`"
+- "Ale Shopify runtime go dostarcza"
+- "Bundler: NIE includuj tego w bundle"
+
+### Różnica: dependencies vs peerDependencies
+
+```json
+// PRZED (BŁĘDNE):
+{
+  "dependencies": {
+    "@shopify/web-pixels-extension": "^2.10.0"
+  }
+}
+// Bundler próbuje spakować → BŁĄD
+
+// PO (POPRAWNE):
+{
+  "peerDependencies": {
+    "@shopify/web-pixels-extension": "*"
+  }
+}
+// Bundler pomija → DZIAŁA
+```
+
+---
+
+## 🧪 Weryfikacja
+
+### Test 1: Sprawdzenie package.json
+
+```bash
+$ cat extensions/my-web-pixel/package.json
+{
+  "peerDependencies": {
+    "@shopify/web-pixels-extension": "*"
+  }
+}
+```
+
+### Test 2: Deploy Aplikacji
+
+```bash
+$ shopify app deploy
+```
+
+**Oczekiwany Wynik:**
+```
+asystent-klienta │ Running theme check on your Theme app extension...
+    my-web-pixel │ Bundling UI extension my-web-pixel... ✓
+```
+
+---
+
+## 🔧 Jeśli To Nadal Nie Działa
+
+### Opcja 1: Sprawdź Wersję Shopify CLI
+
+```bash
+shopify version
+```
+
+Jeśli wersja < 3.50, może być konieczna aktualizacja:
+
+```bash
+npm install -g @shopify/cli @shopify/app
+```
+
+### Opcja 2: Całkowite Usunięcie Zależności
+
+Jeśli peerDependencies nie działają, spróbuj całkowicie usunąć pakiet z package.json:
+
+```json
+{
+  "name": "my-web-pixel",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "license": "UNLICENSED"
+}
+```
+
+TypeScript nadal powinien rozpoznać typy jeśli są zainstalowane globalnie lub w workspace.
+
+### Opcja 3: Zmiana Import na Global
+
+Ostateczna opcja - zmień kod źródłowy aby używał global zamiast import:
+
+```typescript
+// ZAMIAST:
+import {register} from "@shopify/web-pixels-extension";
+
+// UŻYJ:
+declare const register: any;
+```
+
+Ale to jest najmniej eleganckie rozwiązanie.
+
+---
+
+## 📝 Podsumowanie Statusu
+
+| Próba | Podejście | Status | Commit |
+|-------|-----------|--------|--------|
+| 1 | extension.config.js | ❌ Nie zadziałało | 37c0514 |
+| 2 | shopify.extension.toml [build] | ❌ Nie zadziałało | ed9bccc |
+| 3 | peerDependencies | 🔄 W trakcie testowania | 784311b |
+
+---
+
+## 🚀 Następne Kroki
+
+1. ✅ **Spróbuj deploy z peerDependencies**
+   ```bash
+   shopify app deploy
+   ```
+
+2. ❓ **Jeśli błąd nadal występuje:**
+   - Sprawdź `shopify version`
+   - Prześlij output wersji
+   - Możemy spróbować innych rozwiązań
+
+3. ❓ **Możliwe dalsze kroki:**
+   - Aktualizacja Shopify CLI
+   - Usunięcie całkowite z package.json
+   - Zmiana na global declaration
+   - Zgłoszenie bug do Shopify Support
+
+---
+
+*Ostatnia aktualizacja: 2025-11-17 22:33 UTC*
+*Status: TESTOWANIE peerDependencies*
 
 ---
 
