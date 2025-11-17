@@ -10,9 +10,9 @@
  * Pobiera cart_id z Shopify Cart API (localStorage lub /cart.js)
  * Zwraca cart_id w formacie gid://shopify/Cart/xyz lub null
  */
-export async function getShopifyCartId() {
+async function getShopifyCartId() {
   try {
-    // Shopify cart token jest dostÄ™pny w localStorage lub przez /cart.js
+    // Shopify cart token jest dostępny w localStorage lub przez /cart.js
     const cartRes = await fetch('/cart.js', {
       method: 'GET',
       credentials: 'same-origin',
@@ -33,21 +33,20 @@ export async function getShopifyCartId() {
     
     return null;
   } catch (err) {
-    console.error('Błąd czatu:', err);
+    console.error('Błąd pobierania koszyka:', err);
     reportUiExtensionError(err, {
-      stage: 'chat_execution',
-      user_message_len: text.length,
-      render_mode: renderMode,
+      stage: 'get_cart_id',
+      error_message: err instanceof Error ? err.message : 'Unknown error',
     });
-    const safeMsg = err instanceof Error ? err.message : 'Nieznany błąd.';
-    const finalText = accumulated.length > 0 ? `${accumulated} (Błąd: ${safeMsg})` : 'Przepraszam, wystąpił błąd. Spróbuj ponownie.';
-    updateAssistantMessage(msgId, finalText);
-    const el = document.getElementById(msgId);
-    if (el) el.classList.add('msg-error');
-  } finally {
+    return null;
+  }
+}
+
+/**
+ * Parsuje odpowiedź asystenta i wyodrębnia specjalne akcje
  * Zwraca obiekt z parsed text + extracted actions
  */
-export function parseAssistantResponse(text) {
+function parseAssistantResponse(text) {
   const actions = {
     hasCheckoutUrl: false,
     checkoutUrl: null,
@@ -83,17 +82,15 @@ export function parseAssistantResponse(text) {
       console.warn('Failed to parse order details:', e);
     }
     cleanedText = cleanedText.replace(/\[ORDER_STATUS:[^\]]+\]/, '').trim();
-          const serverError = new Error(`Serwer zwrócił błąd (${res.status}).`);
-          reportUiExtensionError(serverError, { stage: 'http_response', status: res.status, response_body: errText.slice(0, 500) });
-          throw serverError;
+  }
   
   return { text: cleanedText, actions };
 }
 
 /**
- * Renderuje specjalny widget checkout button jeĹ›li wykryto URL
+ * Renderuje specjalny widget checkout button jeśli wykryto URL
  */
-export function renderCheckoutButton(checkoutUrl, messageEl) {
+function renderCheckoutButton(checkoutUrl, messageEl) {
   const btn = document.createElement('a');
   btn.href = checkoutUrl;
   btn.className = 'epir-checkout-button';
@@ -202,7 +199,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // type StreamPayload = { content?; delta?; session_id?; error?; done? };
 
 /* Pomocnicze UI */
-export function createAssistantMessage(messagesEl) {
+function createAssistantMessage(messagesEl) {
   const id = `msg-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   const div = document.createElement('div');
   div.className = 'msg msg-assistant msg-typing';
@@ -214,7 +211,7 @@ export function createAssistantMessage(messagesEl) {
   return { id, el: div };
 }
 
-export function updateAssistantMessage(id, text) {
+function updateAssistantMessage(id, text) {
   const el = document.getElementById(id);
   if (!el) return;
   el.textContent = text;
@@ -222,7 +219,7 @@ export function updateAssistantMessage(id, text) {
   if (parent) parent.scrollTop = parent.scrollHeight;
 }
 
-export function finalizeAssistantMessage(id) {
+function finalizeAssistantMessage(id) {
   const el = document.getElementById(id);
   if (!el) return;
   el.classList.remove('msg-typing');
@@ -231,7 +228,7 @@ export function finalizeAssistantMessage(id) {
   el.setAttribute('role', 'status');
 }
 
-export function createUserMessage(messagesEl, text) {
+function createUserMessage(messagesEl, text) {
   const div = document.createElement('div');
   div.className = 'msg msg-user';
   div.textContent = text;
@@ -239,8 +236,8 @@ export function createUserMessage(messagesEl, text) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-/* Robustny parser SSE/JSONL z obsĹ‚ugÄ… delta (nowy) i content (fallback) */
-export async function processSSEStream(
+/* Robustny parser SSE/JSONL z obsługą delta (nowy) i content (fallback) */
+async function processSSEStream(
   body,
   msgId,
   sessionIdKey,
@@ -325,8 +322,8 @@ export async function processSSEStream(
   }
 }
 
-/* GĹ‚Ăłwna funkcja wysyĹ‚ki z fallbackiem JSON */
-export async function sendMessageToWorker(
+/* Główna funkcja wysyłki z fallbackiem JSON */
+async function sendMessageToWorker(
   text,
   endpoint,
   sessionIdKey,
@@ -502,16 +499,9 @@ export async function sendMessageToWorker(
   }
 }
 
-export default {
-  createAssistantMessage,
-  updateAssistantMessage,
-  finalizeAssistantMessage,
-  createUserMessage,
-  processSSEStream,
-  sendMessageToWorker,
-};
+// Kod ładowany bezpośrednio w przeglądarce - brak eksportów
 
-// DODANE: fix przeĹ‚adowania strony (preventDefault) i wywoĹ‚anie /apps/assistant/chat
+// DODANE: fix przeładowania strony (preventDefault) i wywołanie /apps/assistant/chat
 document.addEventListener('DOMContentLoaded', () => {
   try {
     const form = document.querySelector('#assistant-form');
