@@ -32,14 +32,19 @@ export async function getShopifyCartId() {
     }
     
     return null;
-  } catch (e) {
-    console.error('Error fetching Shopify cart ID:', e);
-    return null;
-  }
-}
-
-/**
- * Parsuje odpowiedĹş asystenta i wykrywa specjalne akcje (koszyk, checkout)
+  } catch (err) {
+    console.error('Błąd czatu:', err);
+    reportUiExtensionError(err, {
+      stage: 'chat_execution',
+      user_message_len: text.length,
+      render_mode: renderMode,
+    });
+    const safeMsg = err instanceof Error ? err.message : 'Nieznany błąd.';
+    const finalText = accumulated.length > 0 ? `${accumulated} (Błąd: ${safeMsg})` : 'Przepraszam, wystąpił błąd. Spróbuj ponownie.';
+    updateAssistantMessage(msgId, finalText);
+    const el = document.getElementById(msgId);
+    if (el) el.classList.add('msg-error');
+  } finally {
  * Zwraca obiekt z parsed text + extracted actions
  */
 export function parseAssistantResponse(text) {
@@ -78,7 +83,9 @@ export function parseAssistantResponse(text) {
       console.warn('Failed to parse order details:', e);
     }
     cleanedText = cleanedText.replace(/\[ORDER_STATUS:[^\]]+\]/, '').trim();
-  }
+          const serverError = new Error(`Serwer zwrócił błąd (${res.status}).`);
+          reportUiExtensionError(serverError, { stage: 'http_response', status: res.status, response_body: errText.slice(0, 500) });
+          throw serverError;
   
   return { text: cleanedText, actions };
 }
@@ -97,6 +104,27 @@ export function renderCheckoutButton(checkoutUrl, messageEl) {
   
   messageEl.appendChild(document.createElement('br'));
   messageEl.appendChild(btn);
+}
+
+function reportUiExtensionError(error, context = {}) {
+  try {
+    const publish = typeof Shopify !== 'undefined' && Shopify?.analytics && typeof Shopify.analytics.publish === 'function'
+      ? Shopify.analytics.publish
+      : null;
+    if (!publish) return;
+
+    const safeError = error instanceof Error ? error : new Error(String(error));
+    publish('ui_extension_errored', {
+      source: 'assistant',
+      message: safeError.message,
+      stack: safeError.stack || null,
+      url: typeof window !== 'undefined' ? window.location.href : null,
+      timestamp: Date.now(),
+      ...context,
+    });
+  } catch (publishErr) {
+    console.warn('[EPIR Assistant] Failed to publish ui_extension_errored', publishErr);
+  }
 }
 
 // Minimal initializer: bind toggle button to open/close the assistant
@@ -248,6 +276,7 @@ export async function processSSEStream(
           parsed = JSON.parse(dataStr);
         } catch (e) {
           console.error('SSE JSON parse error', e, dataStr);
+              reportUiExtensionError(e, { stage: 'parse_sse', stream_chunk: dataStr.slice(0, 500) });
           throw new Error('BĹ‚Ä…d komunikacji: otrzymano nieprawidĹ‚owe dane strumienia.');
         }
 
@@ -442,9 +471,14 @@ export async function sendMessageToWorker(
         }
       }
   } catch (err) {
-    console.error('BĹ‚Ä…d czatu:', err);
-    const safeMsg = err instanceof Error ? err.message : 'Nieznany bĹ‚Ä…d.';
-    const finalText = accumulated.length > 0 ? `${accumulated} (BĹ‚Ä…d: ${safeMsg})` : 'Przepraszam, wystÄ…piĹ‚ bĹ‚Ä…d. SprĂłbuj ponownie.';
+    console.error('Błąd czatu:', err);
+    reportUiExtensionError(err, {
+      stage: 'chat_execution',
+      user_message_len: text.length,
+      render_mode: renderMode,
+    });
+    const safeMsg = err instanceof Error ? err.message : 'Nieznany błąd.';
+    const finalText = accumulated.length > 0 ? `${accumulated} (Błąd: ${safeMsg})` : 'Przepraszam, wystąpił błąd. Spróbuj ponownie.';
     updateAssistantMessage(msgId, finalText);
     const el = document.getElementById(msgId);
     if (el) el.classList.add('msg-error');
