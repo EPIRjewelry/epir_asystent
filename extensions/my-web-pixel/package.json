@@ -2,8 +2,5 @@
   "name": "my-web-pixel",
   "version": "1.0.0",
   "main": "dist/main.js",
-  "license": "UNLICENSED",
-  "peerDependencies": {
-    "@shopify/web-pixels-extension": "*"
-  }
+  "license": "UNLICENSED"
 }
