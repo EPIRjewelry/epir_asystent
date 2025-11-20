@@ -367,7 +367,7 @@ export async function getCustomerById(env: Env, customerId: string): Promise<{ f
     const endpoint = `https://${shopDomain}/admin/api/2024-07/graphql.json`;
     const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': adminToken }, body: JSON.stringify({ query, variables: { id: customerId } }) });
     if (!response.ok) return null;
-    const json = await response.json().catch(() => null);
+    const json: any = await response.json().catch(() => null);
     const customer = json?.data?.customer;
     if (!customer) return null;
     return { firstName: customer.firstName, lastName: customer.lastName, email: customer.email };

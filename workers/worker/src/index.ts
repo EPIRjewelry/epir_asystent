@@ -377,6 +377,12 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const customerId = url.searchParams.get('logged_in_customer_id') || null;
   const shopId = url.searchParams.get('shop') || env.SHOP_DOMAIN;
+  
+  // 🔴 POPRAWKA SESJI: Używamy `payload.session_id` LUB generujemy nowy
+  const sessionId = payload.session_id ?? crypto.randomUUID();
+  const doId = env.SESSION_DO.idFromName(sessionId);
+  const stub = env.SESSION_DO.get(doId);
+  
   let customerToken: string | undefined;
   if (customerId && shopId) {
     try {
@@ -411,11 +417,6 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       console.warn('[handleChat] Unable to fetch/store customer profile:', e);
     }
   }
-  
-  // 🔴 POPRAWKA SESJI: Używamy `payload.session_id` LUB generujemy nowy
-  const sessionId = payload.session_id ?? crypto.randomUUID();
-  const doId = env.SESSION_DO.idFromName(sessionId);
-  const stub = env.SESSION_DO.get(doId);
 
   // 🔴 POPRAWKA SESJI: Jeśli sesja jest NOWA, zapisujemy jej ID w DO
   if (!payload.session_id) {

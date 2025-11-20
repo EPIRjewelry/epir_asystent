@@ -21,6 +21,16 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
   });
 }
 
+function corsHeaders(request: Request, env: Env): Record<string, string> {
+  // Allow the exact requesting origin if present (e.g., App Proxy/Shopify), otherwise fall back to configured origin
+  const originHeader = request.headers.get('Origin') || env.ALLOWED_ORIGIN || '*';
+  return {
+    'Access-Control-Allow-Origin': originHeader,
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Shop-Signature',
+  };
+}
+
 async function ensurePixelTable(db: D1Database): Promise<void> {
   console.log('[ANALYTICS_WORKER] 🔧 Ensuring pixel_events table exists...');
   
@@ -574,7 +584,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     let viewportH: number | null = null;
     let scrollDepth: number | null = null;
     let timeOnPage: number | null = null;
-    let elementTag: string | null = null;
+        return json({ ok: false, error: 'Invalid payload' }, 400, corsHeaders(request, env));
     let elementId: string | null = null;
     let elementClass: string | null = null;
     let inputName: string | null = null;
@@ -782,11 +792,11 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     // ============================================================================
     // Upsert customer session and trigger AI analysis for behavior scoring
     let activateChat = false; // Flag to return in response for Web Pixel
-    if (customerId && sessionId) {
-      await ensureCustomerSessionsTable(env.DB);
-      await ensureCustomerEventsTable(env.DB);
-      await upsertCustomerSession(env.DB, customerId, sessionId, timestamp);
-      
+        return json({ 
+          ok: true, 
+          activate_chat: activateChat,
+          reason: activateChat ? 'high_engagement_score' : null
+        }, 200, corsHeaders(request, env));
       // Insert event to customer_events table for journey tracking
       await insertCustomerEvent(env.DB, customerId, sessionId, eventType, timestamp, {
         pageUrl,
@@ -795,7 +805,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
         productTitle,
         variantId,
         cartToken: cartId,
-        eventDataJson: eventJson,
+        return json({ ok: false, error: 'insert_failed' }, 500, corsHeaders(request, env));
       });
       
       // Get current event count for this session
@@ -908,18 +918,18 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
   }
 }
 
-async function handlePixelCount(env: Env): Promise<Response> {
+async function handlePixelCount(request: Request, env: Env): Promise<Response> {
   await ensurePixelTable(env.DB);
   try {
     const row = await env.DB.prepare('SELECT COUNT(*) as cnt FROM pixel_events').first<{ cnt: number }>();
     const count = (row && typeof row.cnt === 'number') ? row.cnt : 0;
-    return json({ count }, 200);
+    return json({ count }, 200, corsHeaders(request, env));
   } catch (e) {
-    return json({ count: 0 }, 200);
+    return json({ count: 0 }, 200, corsHeaders(request, env));
   }
 }
 
-async function handlePixelEvents(env: Env, limitParam?: string | null): Promise<Response> {
+async function handlePixelEvents(request: Request, env: Env, limitParam?: string | null): Promise<Response> {
   const parsedLimit = Number(limitParam) || 20;
   const limit = Math.max(1, Math.min(200, parsedLimit));
   await ensurePixelTable(env.DB);
@@ -943,14 +953,14 @@ async function handlePixelEvents(env: Env, limitParam?: string | null): Promise<
         created_at: r.created_at,
       } as Record<string, unknown>;
     });
-    return json({ events }, 200);
+    return json({ events }, 200, corsHeaders(request, env));
   } catch (e) {
     console.warn('[pixel] events read failed:', e);
-    return json({ events: [] }, 200);
+    return json({ events: [] }, 200, corsHeaders(request, env));
   }
 }
 
-async function handleCustomerJourney(env: Env, url: URL): Promise<Response> {
+async function handleCustomerJourney(request: Request, env: Env, url: URL): Promise<Response> {
   await ensureCustomerEventsTable(env.DB);
   
   const customerId = url.searchParams.get('customer_id');
@@ -1029,7 +1039,7 @@ async function handleCustomerJourney(env: Env, url: URL): Promise<Response> {
     const result = bindings.length > 0 ? await stmt.bind(...bindings).all() : await stmt.all();
     
     if (!result?.results) {
-      return json({ journey: [] }, 200);
+      return json({ journey: [] }, 200, corsHeaders(request, env));
     }
     
     // Group by customer and session for easier analysis
@@ -1070,14 +1080,14 @@ async function handleCustomerJourney(env: Env, url: URL): Promise<Response> {
         customer_id: customer.customer_id,
         sessions: Object.values(customer.sessions),
       }))
-    }, 200);
+    }, 200, corsHeaders(request, env));
   } catch (e) {
     console.error('[ANALYTICS_WORKER] ❌ Failed to get customer journey:', e);
-    return json({ journey: [], error: String(e) }, 500);
+    return json({ journey: [], error: String(e) }, 500, corsHeaders(request, env));
   }
 }
 
-async function handleCustomerSessions(env: Env, url: URL): Promise<Response> {
+async function handleCustomerSessions(request: Request, env: Env, url: URL): Promise<Response> {
   await ensureCustomerSessionsTable(env.DB);
   
   const customerId = url.searchParams.get('customer_id');
@@ -1126,10 +1136,10 @@ async function handleCustomerSessions(env: Env, url: URL): Promise<Response> {
     const stmt = env.DB.prepare(query);
     const result = bindings.length > 0 ? await stmt.bind(...bindings).all() : await stmt.all();
     
-    return json({ sessions: result?.results || [] }, 200);
+    return json({ sessions: result?.results || [] }, 200, corsHeaders(request, env));
   } catch (e) {
     console.error('[ANALYTICS_WORKER] ❌ Failed to get customer sessions:', e);
-    return json({ sessions: [], error: String(e) }, 500);
+      return json({ sessions: [], error: String(e) }, 500, corsHeaders(request, env));
   }
 }
 
@@ -1137,22 +1147,26 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'POST' && url.pathname === '/pixel') {
-      return handlePixelPost(request, env);
+        return handlePixelPost(request, env);
     }
     if (request.method === 'GET' && url.pathname === '/pixel/count') {
-      return handlePixelCount(env);
+      return handlePixelCount(request, env);
     }
     if (request.method === 'GET' && url.pathname === '/pixel/events') {
-      return handlePixelEvents(env, url.searchParams.get('limit'));
+      return handlePixelEvents(request, env, url.searchParams.get('limit'));
     }
     if (request.method === 'GET' && url.pathname === '/journey') {
-      return handleCustomerJourney(env, url);
+      return handleCustomerJourney(request, env, url);
     }
     if (request.method === 'GET' && url.pathname === '/sessions') {
-      return handleCustomerSessions(env, url);
+      return handleCustomerSessions(request, env, url);
     }
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/healthz')) {
-      return new Response('ok', { status: 200 });
+      return new Response('ok', { status: 200, headers: corsHeaders(request, env) });
+    }
+    // Respond to CORS preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders(request, env) });
     }
     return new Response('Not Found', { status: 404 });
   },
