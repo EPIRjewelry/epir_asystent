@@ -791,12 +791,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     // CUSTOMER SESSION TRACKING & AI ANALYSIS
     // ============================================================================
     // Upsert customer session and trigger AI analysis for behavior scoring
-    let activateChat = false; // Flag to return in response for Web Pixel
-        return json({ 
-          ok: true, 
-          activate_chat: activateChat,
-          reason: activateChat ? 'high_engagement_score' : null
-        }, 200, corsHeaders(request, env));
+    let activateChat = false;
       // Insert event to customer_events table for journey tracking
       await insertCustomerEvent(env.DB, customerId, sessionId, eventType, timestamp, {
         pageUrl,
@@ -805,7 +800,6 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
         productTitle,
         variantId,
         cartToken: cartId,
-        return json({ ok: false, error: 'insert_failed' }, 500, corsHeaders(request, env));
       });
       
       // Get current event count for this session
@@ -1171,3 +1165,5 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
 };
+
+
