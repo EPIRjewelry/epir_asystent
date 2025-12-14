@@ -871,10 +871,10 @@ wrangler dev
 
 ```bash
 # Z głównego katalogu repo
-node --input-type=module tools/prompt_audit.ts
+node tools/prompt_audit.mjs
 
-# Lub z tsx
-npx tsx tools/prompt_audit.ts
+# Lub z tsx (jeśli zainstalowane)
+npx tsx tools/prompt_audit.mjs
 ```
 
 Oczekiwany output: Wszystkie prompty powinny przejść z minimalnymi ostrzeżeniami.

@@ -37,10 +37,10 @@ This PR implements MCP-based RAG (Retrieval-Augmented Generation) orchestration 
    - Orchestrates: MCP fetch → RAG context → LLM (placeholder) → SessionDO save
    - Includes TODOs for Groq LLM and Vectorize integration
 
-5. **`tools/prompt_audit.ts`**
-   - Standalone TypeScript script for auditing prompt files
+5. **`tools/prompt_audit.mjs`**
+   - Standalone JavaScript (ESM) script for auditing prompt files
    - Checks: memory/context, Chain of Thought, consent/PII, length, exports
-   - Runnable with: `node --input-type=module tools/prompt_audit.ts`
+   - Runnable with: `node tools/prompt_audit.mjs`
 
 6. **`.github/PULL_REQUEST_TEMPLATE.md`**
    - This template for consistent PR documentation
@@ -89,10 +89,10 @@ These are intentionally left as placeholders to keep this PR focused on the core
 
 ```bash
 # From repository root
-node --input-type=module tools/prompt_audit.ts
+node tools/prompt_audit.mjs
 
 # Or with tsx
-npx tsx tools/prompt_audit.ts
+npx tsx tools/prompt_audit.mjs
 ```
 
 Expected output: All prompts should pass with minimal warnings.

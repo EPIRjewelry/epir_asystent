@@ -1,3 +1,5 @@
+/// <reference types="@cloudflare/workers-types" />
+
 /**
  * workers/worker/src/handlers/chat_handler.ts
  * 

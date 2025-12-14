@@ -1,3 +1,5 @@
+/// <reference types="@cloudflare/workers-types" />
+
 /**
  * workers/worker/src/durable_objects/session_do.ts
  * 
