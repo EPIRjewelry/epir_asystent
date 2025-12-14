@@ -134,7 +134,7 @@ export async function handleChatRequest(
   try {
     // CORS headers
     const corsHeaders = {
-      'Access-Control-Allow-Origin': '*', // TODO: Restrict to allowed origins
+      'Access-Control-Allow-Origin': '*', // TODO: Restrict to allowed origins from env.ALLOWED_ORIGINS
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, X-Shopify-Shop-Domain',
       'Content-Type': 'application/json'
@@ -370,7 +370,7 @@ async function parseRequestPayload(request: Request): Promise<ChatRequestPayload
  * Generate session ID
  */
 function generateSessionId(): string {
-  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**

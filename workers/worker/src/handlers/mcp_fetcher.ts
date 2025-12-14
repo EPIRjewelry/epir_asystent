@@ -135,7 +135,7 @@ export async function fetchMCP(
       q: query,
       top_k: topK
     },
-    id: `mcp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    id: `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
   };
   
   try {
