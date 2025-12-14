@@ -7,6 +7,9 @@ workers_dev = true
 [build]
 command = ""
 
+[vars]
+ALLOWED_ORIGINS = "https://epirbizuteria.pl,https://epir-art-silver-jewellery.myshopify.com,https://asystent.epirbizuteria.pl"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "jewelry-analytics-db"

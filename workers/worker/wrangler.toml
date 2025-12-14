@@ -72,6 +72,7 @@ invocation_logs = true
 
 [vars]
 ALLOWED_ORIGIN = "https://epir-art-silver-jewellery.myshopify.com"
+ALLOWED_ORIGINS = "https://epirbizuteria.pl,https://epir-art-silver-jewellery.myshopify.com,https://asystent.epirbizuteria.pl"
 SHOP_DOMAIN = "epir-art-silver-jewellery.myshopify.com"
 # WORKER_ORIGIN: URL Workera dla internal MCP calls (używane w rag.ts callMcpTool)
 # W produkcji: https://asystent.epirbizuteria.pl
