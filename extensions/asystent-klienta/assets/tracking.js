@@ -72,11 +72,12 @@
       // Use analytics.publish first (so Web Pixel can pick it up)
       Shopify.analytics.publish('epir:page_exit', payload);
 
-      // Also attempt navigator.sendBeacon to /pixel as a fallback for reliability
+      // Also attempt navigator.sendBeacon to analytics worker as a fallback for reliability
       try {
         const beaconData = JSON.stringify({ type: 'epir:page_exit', data: payload });
+        const pixelEndpoint = 'https://epir-analityc-worker.krzysztofdzugaj.workers.dev/pixel';
         if (navigator.sendBeacon) {
-          navigator.sendBeacon('/pixel', beaconData);
+          navigator.sendBeacon(pixelEndpoint, beaconData);
         }
       } catch (err) {
         // ignore

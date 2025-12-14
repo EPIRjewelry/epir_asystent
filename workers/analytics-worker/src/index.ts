@@ -12,6 +12,7 @@ interface Env {
   DB: D1Database;
   SESSION_DO: DurableObjectNamespace;
   AI_WORKER: Fetcher; // Service Binding to AI Worker for customer behavior analysis
+  ALLOWED_ORIGINS?: string; // Comma-separated whitelist for CORS
 }
 
 function json(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
@@ -22,10 +23,25 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
 }
 
 function corsHeaders(request: Request, env: Env): Record<string, string> {
-  // Allow the exact requesting origin if present (e.g., App Proxy/Shopify), otherwise fall back to configured origin
-  const originHeader = request.headers.get('Origin') || env.ALLOWED_ORIGIN || '*';
+  const requestOrigin = request.headers.get('Origin');
+
+  const allowedOrigins = (env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  let allowOrigin = '*';
+
+  if (requestOrigin && allowedOrigins.length > 0) {
+    if (allowedOrigins.includes(requestOrigin)) {
+      allowOrigin = requestOrigin;
+    } else {
+      console.warn(`[ANALYTICS_WORKER] ⚠️ Rejected Origin (not whitelisted): ${requestOrigin}`);
+    }
+  }
+
   return {
-    'Access-Control-Allow-Origin': originHeader,
+    'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Shop-Signature',
   };
@@ -455,6 +471,8 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
   console.log('[ANALYTICS_WORKER] 📊 Event data keys:', body.data && typeof body.data === 'object' ? Object.keys(body.data) : 'none');
   
   await ensurePixelTable(env.DB);
+  await ensureCustomerEventsTable(env.DB);
+  await ensureCustomerSessionsTable(env.DB);
   
   try {
     const eventType = body.type; // e.g., 'product_viewed', 'page_viewed', 'cart_updated'
@@ -584,7 +602,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     let viewportH: number | null = null;
     let scrollDepth: number | null = null;
     let timeOnPage: number | null = null;
-        return json({ ok: false, error: 'Invalid payload' }, 400, corsHeaders(request, env));
+    let elementTag: string | null = null;
     let elementId: string | null = null;
     let elementClass: string | null = null;
     let inputName: string | null = null;
@@ -855,7 +873,6 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
           }
         }
       }
-    }
     
     // ============================================================================
     // INTEGRATION: Analytics Worker → Session DO (product view tracking)

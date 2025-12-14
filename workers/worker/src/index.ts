@@ -74,6 +74,7 @@ export interface Env {
   VECTOR_INDEX?: VectorizeIndex;
   SHOPIFY_APP_SECRET: string;
   ALLOWED_ORIGIN?: string;
+  ALLOWED_ORIGINS?: string; // Comma-separated whitelist for CORS
   SHOPIFY_STOREFRONT_TOKEN?: string;
   SHOPIFY_ADMIN_TOKEN?: string;
   SHOP_DOMAIN?: string;
@@ -143,10 +144,32 @@ function ensureHistoryArray(input: unknown): HistoryEntry[] {
   }
   return out.slice(-MAX_HISTORY_IN_DO);
 }
-function cors(env: Env): Record<string, string> {
-  const origin = env.ALLOWED_ORIGIN || '*';
+function cors(env: Env, request?: Request): Record<string, string> {
+  const requestOrigin = request?.headers.get('Origin');
+
+  const allowedOrigins = (env.ALLOWED_ORIGINS || env.ALLOWED_ORIGIN || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  let allowOrigin = '*';
+
+  if (requestOrigin && allowedOrigins.length > 0) {
+    if (allowedOrigins.includes(requestOrigin)) {
+      allowOrigin = requestOrigin;
+    } else if (requestOrigin === 'null' && allowedOrigins.includes('null')) {
+      allowOrigin = 'null';
+    } else {
+      console.warn(`[worker] ⚠️ Rejected Origin (not whitelisted): ${requestOrigin}`);
+      // keep allowOrigin as '*', so browser with disallowed origin will block
+    }
+  } else if (!requestOrigin && allowedOrigins.length === 1 && allowedOrigins[0] !== '*') {
+    // No Origin header (e.g., file://, mobile webviews). If a single whitelist is set, mirror it for predictability.
+    allowOrigin = allowedOrigins[0];
+  }
+
   return {
-    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Shop-Signature',
   };
@@ -370,7 +393,7 @@ export class SessionDO {
 async function handleChat(request: Request, env: Env): Promise<Response> {
   const payload = parseChatRequestBody(await request.json().catch(() => null));
   if (!payload) {
-    return new Response('Bad Request: message required', { status: 400, headers: cors(env) });
+    return new Response('Bad Request: message required', { status: 400, headers: cors(env, request) });
   }
 
   // [TOKEN VAULT] Bez zmian
@@ -475,7 +498,7 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
   }
 
   console.log(`[handleChat] Przekierowanie do streamAssistantResponse dla sesji: ${sessionId}`);
-  return streamAssistantResponse(sessionId, payload.message, stub, env, customerToken);
+  return streamAssistantResponse(request, sessionId, payload.message, stub, env, customerToken);
 }
 
 // ============================================================================
@@ -483,6 +506,7 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 // KRYTYCZNA AKTUALIZACJA: Pełna implementacja pętli wywołań narzędzi (Harmony).
 // ============================================================================
 async function streamAssistantResponse(
+  request: Request,
   sessionId: string,
   userMessage: string,
   stub: DurableObjectStub,
@@ -709,7 +733,7 @@ async function streamAssistantResponse(
   // Natychmiast zwróć strumień do klienta
   return new Response(readable, {
     headers: {
-      ...cors(env),
+      ...cors(env, request),
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
@@ -723,26 +747,55 @@ async function streamAssistantResponse(
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: cors(env) });
+      return new Response(null, { headers: cors(env, request) });
     }
 
     const url = new URL(request.url);
 
+    // Proxy analytics endpoints (/pixel, /pixel/count, /pixel/events) to analytics-worker
+    if (url.pathname === '/pixel' || url.pathname.startsWith('/pixel/')) {
+      // CORS for pixel endpoints: allow all origins (analytics events)
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+          },
+        });
+      }
+
+      const targetBase = 'https://epir-analityc-worker.krzysztofdzugaj.workers.dev';
+      const targetUrl = `${targetBase}${url.pathname}${url.search}`;
+      const proxyRequest = new Request(targetUrl, request);
+      const proxied = await fetch(proxyRequest);
+      const headers = new Headers(proxied.headers);
+      headers.set('Access-Control-Allow-Origin', '*');
+      headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+      headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+      return new Response(proxied.body, {
+        status: proxied.status,
+        statusText: proxied.statusText,
+        headers,
+      });
+    }
+
     // Healthcheck
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/ping' || url.pathname === '/health')) {
-      return new Response('ok', { status: 200, headers: cors(env) });
+      return new Response('ok', { status: 200, headers: cors(env, request) });
     }
 
     // [BEZPIECZEŃSTWO] Globalny strażnik HMAC dla App Proxy
     if (url.pathname.startsWith('/apps/assistant/') && request.method === 'POST') {
       if (!env.SHOPIFY_APP_SECRET) {
-        return new Response('Server misconfigured', { status: 500, headers: cors(env) });
+        return new Response('Server misconfigured', { status: 500, headers: cors(env, request) });
       }
       
       const result = await verifyAppProxyHmac(request.clone(), env.SHOPIFY_APP_SECRET);
       if (!result.ok) {
         console.warn('HMAC verification failed:', result.reason);
-        return new Response('Unauthorized: Invalid HMAC signature', { status: 401, headers: cors(env) });
+        return new Response('Unauthorized: Invalid HMAC signature', { status: 401, headers: cors(env, request) });
       }
 
       // [BEZPIECZEŃSTWO] Replay protection
@@ -754,7 +807,7 @@ export default {
         const replayResult = await replayCheck(stub, signature, timestamp);
         if (!replayResult.ok) {
           console.warn('Replay check failed:', replayResult.reason);
-          return new Response('Unauthorized: Signature already used', { status: 401, headers: cors(env) });
+          return new Response('Unauthorized: Signature already used', { status: 401, headers: cors(env, request) });
         }
       }
     }
@@ -774,7 +827,7 @@ export default {
       return handleMcpRequest(request, env);
     }
 
-    return new Response('Not Found', { status: 404, headers: cors(env) });
+    return new Response('Not Found', { status: 404, headers: cors(env, request) });
   },
 };
 
