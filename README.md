@@ -820,3 +820,180 @@ Ten projekt jest aktywnie utrzymywany — poniżej znajdują się najnowsze zmia
   - Jeśli logi pokażą brak zapisu, zbadać: autoryzację MCP (tokeny), 429/ratelimit oraz zmiany commitów z końca października 2025 (które wcześniej wprowadziły kanoniczny endpoint).
 
 Jeśli chcesz, mogę od razu uruchomić tail logów i zebrać pierwsze dowody (kilka próbek SSE / MCP callów). Możemy też przygotować PR z tą dokumentacją i kodowymi poprawkami.
+
+---
+
+## 🚀 MCP-Based RAG Orchestration (New Feature)
+
+### Przegląd
+
+Nowa funkcjonalność implementuje MCP-based RAG (Retrieval-Augmented Generation) orchestration z serverless backend na Cloudflare Workers:
+
+- **System prompt oparty na MCP** — instrukcje dla AI do używania MCP jako źródła prawdy
+- **SessionDO** — zarządzanie sesjami czatu z historią wiadomości i metadanymi
+- **HMAC weryfikacja** — bezpieczna walidacja requestów z Shopify App Proxy
+- **MCP fetcher** — klient JSON-RPC do Shopify MCP endpoint
+- **Chat handler** — orkiestracja: HMAC → MCP → RAG → LLM → SessionDO
+- **Prompt audit** — skrypt walidujący jakość promptów
+
+### Konfiguracja Secrets
+
+```bash
+cd workers/worker
+
+# Wymagany secret
+wrangler secret put GROQ_API_KEY
+# Wprowadź swój klucz API z https://console.groq.com/keys
+
+# Opcjonalne secrets (dla HMAC i MCP auth)
+wrangler secret put SHOPIFY_SHARED_SECRET
+# Wprowadź shared secret z Shopify Partner Dashboard
+
+wrangler secret put SHOPIFY_ADMIN_TOKEN
+# Wprowadź Admin API access token dla uwierzytelnionych requestów MCP
+```
+
+### Uruchamianie Lokalnie
+
+```bash
+cd workers/worker
+
+# Instalacja zależności
+npm install
+
+# Uruchom dev server
+wrangler dev
+```
+
+### Testowanie
+
+#### 1. Audit Promptów
+
+```bash
+# Z głównego katalogu repo
+node tools/prompt_audit.mjs
+
+# Lub z tsx (jeśli zainstalowane)
+npx tsx tools/prompt_audit.mjs
+```
+
+Oczekiwany output: Wszystkie prompty powinny przejść z minimalnymi ostrzeżeniami.
+
+#### 2. Test Chat Endpoint
+
+```bash
+# Nowa sesja (bez HMAC w trybie dev z DEV_BYPASS=1)
+curl -X POST http://localhost:8787/apps/assistant/chat \
+  -H "Content-Type: application/json" \
+  -H "X-Shopify-Shop-Domain: epir-art-silver-jewellery.myshopify.com" \
+  -d '{
+    "message": "Co to jest polityka zwrotów?",
+    "sessionId": "test_session_1"
+  }'
+```
+
+Oczekiwana odpowiedź:
+```json
+{
+  "reply": "Dziękuję za pytanie...",
+  "sources": [
+    {
+      "text": "...",
+      "score": 0.95,
+      "source": "FAQ: Return Policy"
+    }
+  ],
+  "sessionId": "test_session_1"
+}
+```
+
+#### 3. Test SessionDO
+
+```bash
+# Zapisz wiadomość
+curl -X POST http://localhost:8787/session/test_session_1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "user",
+    "content": "Witaj!",
+    "timestamp": 1702500000000
+  }'
+
+# Pobierz wiadomości
+curl http://localhost:8787/session/test_session_1/messages
+
+# Liczba wiadomości
+curl http://localhost:8787/session/test_session_1/count
+```
+
+### Scenariusze Testowe
+
+#### Scenariusz 1: Nowy Klient
+- Wyślij wiadomość bez `sessionId`
+- Sprawdź, czy nowy ID sesji jest generowany
+- Sprawdź, czy wiadomość jest zapisana w SessionDO
+- Sprawdź, czy odpowiedź zawiera źródła z MCP
+
+#### Scenariusz 2: Powracający Klient
+- Wyślij wiadomość z istniejącym `sessionId`
+- Sprawdź, czy historia rozmów jest pobierana
+- Sprawdź, czy nowe wiadomości są dodawane
+- Sprawdź, czy metadane sesji są zachowane
+
+#### Scenariusz 3: Brak Wyników z MCP
+- Wyślij zapytanie, na które MCP nie może odpowiedzieć (np. "Jaka jest pogoda?")
+- Sprawdź graceful fallback (brak źródeł)
+- Sprawdź, czy odpowiedź jest nadal generowana
+
+#### Scenariusz 4: Weryfikacja HMAC
+- Ustaw `DEV_BYPASS=0` w `.dev.vars`
+- Wyślij request bez HMAC → oczekuj 401 Unauthorized
+- Wyślij request z poprawnym HMAC → oczekuj 200 OK
+
+### Pliki i Struktura
+
+```
+workers/worker/src/
+├── prompts/
+│   └── epir_mcp_system_prompt.ts    # System prompt dla MCP-RAG
+├── durable_objects/
+│   └── session_do.ts                 # SessionDO z zarządzaniem wiadomościami
+├── handlers/
+│   ├── mcp_fetcher.ts                # Klient JSON-RPC dla MCP
+│   └── chat_handler.ts               # Główny handler dla /chat endpoint
+
+tools/
+└── prompt_audit.ts                   # Skrypt auditujący prompty
+
+.github/
+└── PULL_REQUEST_TEMPLATE.md          # Szablon PR
+```
+
+### TODOs i Placeholdery
+
+Następujące integracje są oznaczone jako TODO/PLACEHOLDER:
+
+1. **Groq LLM Client** — w `chat_handler.ts` jest placeholder dla wywołania Groq API
+2. **Vectorize/Embeddings** — w `chat_handler.ts` jest TODO dla semantic search z Cloudflare AI
+3. **D1 Archival** — w `session_do.ts` jest placeholder dla archiwizacji starych wiadomości do D1
+
+Te integracje są celowo pozostawione jako placeholdery, aby PR skupiał się na podstawowej strukturze MCP-RAG orchestration.
+
+### Bezpieczeństwo
+
+✅ **Brak sekretów w kodzie**
+- Wszystkie sekrety są przekazywane przez zmienne środowiskowe lub `wrangler secrets`
+- Weryfikacja HMAC zapobiega manipulacji requestów
+- PII consent wymuszony w system prompt
+- Rate limiting w SessionDO zapobiega nadużyciom
+
+### Przyszłe Prace
+
+Ten PR ustanawia fundament dla MCP-based RAG orchestration. Przyszłe PRy powinny rozwiązać:
+
+1. Integracja Groq LLM (zamiana placeholdera)
+2. Integracja Vectorize (semantic search z embeddings)
+3. Archiwizacja D1 (przeniesienie starych wiadomości z SessionDO do D1)
+4. Streaming responses (SSE dla odpowiedzi LLM)
+5. Advanced RAG (hybrydowe wyszukiwanie: MCP + Vectorize + keyword)
+6. Analytics (tracking trafności passages i satysfakcji użytkowników)
