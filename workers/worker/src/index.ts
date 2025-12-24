@@ -658,7 +658,11 @@ async function streamAssistantResponse(
             method: 'POST',
             body: JSON.stringify(assistantToolCallEntry),
           });
-          currentMessages.push(assistantToolCallEntry);
+          // Push only fields valid for GroqMessage (without tool_calls)
+          currentMessages.push({
+            role: assistantToolCallEntry.role,
+            content: assistantToolCallEntry.content,
+          });
 
           // Wyślij "myśli" do klienta
           await sendSSE('status', { message: `Używam narzędzia: ${name}...` });
