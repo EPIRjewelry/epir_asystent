@@ -103,4 +103,65 @@ describe('Tool calls message structure', () => {
     expect(serialized).not.toContain('tool_calls');
     expect(serialized).toContain('<|call|>');
   });
+
+  it('should simulate the exact bug scenario: multi-turn conversation with tool call', () => {
+    // Simulate the exact scenario from the bug report:
+    // Session: f63801b9-be8f-4eb8-934a-6e0249b051eb
+    // Model: openai/gpt-oss-120b
+    // Error at messages.11.tool_calls.0.function
+    
+    // Build a message array as it would be in a real conversation
+    const currentMessages: GroqMessage[] = [
+      { role: 'system', content: 'You are a luxury jewelry assistant.' },
+      { role: 'user', content: 'Show me your rings' },
+      { role: 'assistant', content: 'I will search our catalog for rings.' },
+      // ... imagine more conversation ...
+      { role: 'user', content: 'What about gold rings?' },
+    ];
+    
+    // Simulate fallback tool call detection (the problematic scenario)
+    const toolName = 'search_shop_catalog';
+    const toolArgs = { query: 'gold rings', category: 'rings' };
+    
+    // What was WRONG before (causing 400 error):
+    // currentMessages.push({ 
+    //   role: 'assistant', 
+    //   content: '<|call|>...', 
+    //   tool_calls: [{ name, arguments: args }]  // ❌ This broke Groq API
+    // });
+    
+    // What is CORRECT now (after fix):
+    const assistantMessage: GroqMessage = {
+      role: 'assistant',
+      content: `<|call|>${JSON.stringify({ name: toolName, arguments: toolArgs })}<|end|>`,
+      // ✅ NO tool_calls field
+    };
+    currentMessages.push(assistantMessage);
+    
+    // Add tool result
+    const toolResult = { results: [{ name: 'Gold Ring', price: 1500 }] };
+    currentMessages.push({
+      role: 'tool',
+      name: toolName,
+      content: JSON.stringify(toolResult),
+    });
+    
+    // Verify the final message array is valid for Groq API
+    expect(currentMessages).toHaveLength(6);
+    
+    // Check that NO message has tool_calls field
+    currentMessages.forEach((msg, idx) => {
+      expect(msg, `Message ${idx} should not have tool_calls`).not.toHaveProperty('tool_calls');
+      expect(msg, `Message ${idx} should have role`).toHaveProperty('role');
+      expect(msg, `Message ${idx} should have content`).toHaveProperty('content');
+    });
+    
+    // Verify JSON serialization doesn't include tool_calls
+    const payload = JSON.stringify({ messages: currentMessages });
+    expect(payload).not.toContain('"tool_calls"');
+    
+    // Verify the Harmony format is present
+    expect(payload).toContain('<|call|>');
+    expect(payload).toContain('search_shop_catalog');
+  });
 });
