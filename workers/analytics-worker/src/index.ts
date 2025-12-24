@@ -593,14 +593,12 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
       // 3. Direct href: data.href
       // This ensures page_url is captured for all events, not just page_viewed
       if (!pageUrl) {
-        if (typeof data.url === 'string' && data.url) {
-          pageUrl = data.url;
-        } else if (typeof data.pageUrl === 'string' && data.pageUrl) {
-          pageUrl = data.pageUrl;
-        } else if (typeof data.page_url === 'string' && data.page_url) {
-          pageUrl = data.page_url;
-        } else if (typeof data.href === 'string' && data.href) {
-          pageUrl = data.href;
+        const urlFields = ['url', 'pageUrl', 'page_url', 'href'];
+        for (const field of urlFields) {
+          if (typeof data[field] === 'string' && data[field]) {
+            pageUrl = data[field] as string;
+            break;
+          }
         }
       }
       

@@ -9,6 +9,15 @@
 
 set -e
 
+# Check dependencies
+for cmd in curl jq; do
+  if ! command -v $cmd &> /dev/null; then
+    echo "Error: $cmd is required but not installed."
+    echo "Please install $cmd and try again."
+    exit 1
+  fi
+done
+
 WORKER_URL="https://epir-analityc-worker.krzysztofdzugaj.workers.dev"
 TEST_CUSTOMER_ID="smoke-test-customer-$(date +%s)"
 TEST_SESSION_ID="smoke-test-session-$(date +%s)"
@@ -18,6 +27,7 @@ echo "Analytics Worker Smoke Test"
 echo "=========================================="
 echo ""
 echo "Worker URL: $WORKER_URL"
+echo "Note: Worker domain uses 'analityc' (not 'analytics') - this is the correct production URL"
 echo "Customer ID: $TEST_CUSTOMER_ID"
 echo "Session ID: $TEST_SESSION_ID"
 echo ""
