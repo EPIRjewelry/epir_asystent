@@ -287,6 +287,185 @@ describe('Analytics Worker - /pixel endpoint', () => {
         expect(event).toBeTruthy();
         expect(event?.search_query).toBe('gold ring');
     });
+
+    // ============================================================================
+    // Tests for page_url extraction from various field naming conventions
+    // ============================================================================
+    
+    it('should extract page_url from data.url field (tracking.js format)', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'click_with_position',
+                data: {
+                    customerId: 'test-customer-123',
+                    sessionId: 'test-session-456',
+                    x: 100,
+                    y: 200,
+                    url: 'https://epirbizuteria.pl/products/gold-ring'
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result).toHaveProperty('ok', true);
+
+        // Verify page_url was extracted from data.url
+        const event = await env.DB.prepare('SELECT * FROM pixel_events WHERE event_type = ?')
+            .bind('click_with_position')
+            .first();
+        
+        expect(event).toBeTruthy();
+        expect(event?.page_url).toBe('https://epirbizuteria.pl/products/gold-ring');
+    });
+
+    it('should extract page_url from data.pageUrl field (camelCase variant)', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'scroll_depth',
+                data: {
+                    customerId: 'test-customer-123',
+                    sessionId: 'test-session-456',
+                    depth: 75,
+                    pageUrl: 'https://epirbizuteria.pl/collections/rings'
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result).toHaveProperty('ok', true);
+
+        // Verify page_url was extracted from data.pageUrl
+        const event = await env.DB.prepare('SELECT * FROM pixel_events WHERE event_type = ?')
+            .bind('scroll_depth')
+            .first();
+        
+        expect(event).toBeTruthy();
+        expect(event?.page_url).toBe('https://epirbizuteria.pl/collections/rings');
+    });
+
+    it('should extract page_url from data.page_url field (snake_case variant)', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'page_exit',
+                data: {
+                    customerId: 'test-customer-123',
+                    sessionId: 'test-session-456',
+                    time_on_page_seconds: 45,
+                    page_url: 'https://epirbizuteria.pl/pages/about'
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result).toHaveProperty('ok', true);
+
+        // Verify page_url was extracted from data.page_url
+        const event = await env.DB.prepare('SELECT * FROM pixel_events WHERE event_type = ?')
+            .bind('page_exit')
+            .first();
+        
+        expect(event).toBeTruthy();
+        expect(event?.page_url).toBe('https://epirbizuteria.pl/pages/about');
+    });
+
+    it('should extract page_url from data.href field (href variant)', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'mouse_sample',
+                data: {
+                    customerId: 'test-customer-123',
+                    sessionId: 'test-session-456',
+                    x: 500,
+                    y: 300,
+                    href: 'https://epirbizuteria.pl/'
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result).toHaveProperty('ok', true);
+
+        // Verify page_url was extracted from data.href
+        const event = await env.DB.prepare('SELECT * FROM pixel_events WHERE event_type = ?')
+            .bind('mouse_sample')
+            .first();
+        
+        expect(event).toBeTruthy();
+        expect(event?.page_url).toBe('https://epirbizuteria.pl/');
+    });
+
+    it('should prioritize context.document.location.href over data.url for page_viewed events', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'page_viewed',
+                data: {
+                    customerId: 'test-customer-123',
+                    sessionId: 'test-session-456',
+                    url: 'https://epirbizuteria.pl/fallback',
+                    context: {
+                        document: {
+                            location: {
+                                href: 'https://epirbizuteria.pl/products/silver-necklace'
+                            },
+                            title: 'Silver Necklace'
+                        }
+                    }
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result).toHaveProperty('ok', true);
+
+        // Verify page_url was extracted from context.document.location.href (higher priority)
+        const event = await env.DB.prepare('SELECT * FROM pixel_events WHERE event_type = ?')
+            .bind('page_viewed')
+            .first();
+        
+        expect(event).toBeTruthy();
+        expect(event?.page_url).toBe('https://epirbizuteria.pl/products/silver-necklace');
+    });
+
+    it('should ensure page_url is never null for events with url data', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'epir:custom_event',
+                data: {
+                    customerId: 'test-customer-123',
+                    sessionId: 'test-session-456',
+                    url: 'https://epirbizuteria.pl/test-page'
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+
+        // Verify page_url is not null
+        const event = await env.DB.prepare('SELECT * FROM pixel_events WHERE event_type = ?')
+            .bind('epir:custom_event')
+            .first();
+        
+        expect(event).toBeTruthy();
+        expect(event?.page_url).not.toBeNull();
+        expect(event?.page_url).toBe('https://epirbizuteria.pl/test-page');
+    });
 });
 
 describe('Analytics Worker - /pixel/count endpoint', () => {

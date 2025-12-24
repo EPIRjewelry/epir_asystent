@@ -584,6 +584,26 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
         }
       }
       
+      // ============================================================================
+      // FALLBACK: Extract page_url from various field naming conventions
+      // ============================================================================
+      // Support multiple field naming patterns for page_url to handle:
+      // 1. Custom tracking events (tracking.js): data.url
+      // 2. Alternative naming: data.pageUrl, data.page_url
+      // 3. Direct href: data.href
+      // This ensures page_url is captured for all events, not just page_viewed
+      if (!pageUrl) {
+        if (typeof data.url === 'string' && data.url) {
+          pageUrl = data.url;
+        } else if (typeof data.pageUrl === 'string' && data.pageUrl) {
+          pageUrl = data.pageUrl;
+        } else if (typeof data.page_url === 'string' && data.page_url) {
+          pageUrl = data.page_url;
+        } else if (typeof data.href === 'string' && data.href) {
+          pageUrl = data.href;
+        }
+      }
+      
       // Customer ID (from analytics.init.data or custom tracking)
       if (data.customerId) {
         customerId = String(data.customerId);
