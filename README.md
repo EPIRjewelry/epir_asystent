@@ -142,6 +142,15 @@ wrangler tail epir-analityc-worker --format pretty
 wrangler tail epir-art-jewellery-worker --format pretty
 ```
 
+### 4. Smoke Test (Automatic Verification)
+
+```bash
+cd workers/analytics-worker
+./smoke-test.sh
+```
+
+This script sends test events with various `page_url` formats and provides verification commands. See `VERIFICATION.md` for detailed verification steps.
+
 Troubleshooting (częste problemy)
 --------------------------------
 ### Błąd: "error code: 1042" lub "insert_failed"
@@ -183,6 +192,12 @@ Troubleshooting (częste problemy)
   1. Sprawdź, czy `tracking.liquid` wczytuje `<script src="{{ 'tracking.js' | asset_url }}">`
   2. Włącz block w Theme Editor (Shopify Admin → Themes → Customize)
   3. Sprawdź Console przeglądarki: powinno być `[EPIR Tracking] initialized`
+
+### page_url zapisuje się jako null w D1
+- **Przyczyna:** Brak fallback extraction dla różnych formatów pola page_url (url, pageUrl, page_url, href)
+- **Rozwiązanie:** Fixed in latest version - analytics worker now extracts page_url from multiple field naming conventions
+- **Weryfikacja:** `wrangler d1 execute jewelry-analytics-db --remote --command="SELECT event_type, page_url FROM pixel_events WHERE page_url IS NOT NULL LIMIT 10;"`
+- **Więcej informacji:** Zobacz `workers/analytics-worker/VERIFICATION.md`
 
 ## 🎯 Architektura Kompletna (Flow Diagram)
 
