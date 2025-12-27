@@ -13,6 +13,14 @@ export type GroqMessage = {
   content: string;
   tool_call_id?: string;  // Opcjonalne dla wiadomości 'tool'
   name?: string;           // Opcjonalne dla wiadomości 'tool'
+  tool_calls?: Array<{    // Opcjonalne dla wiadomości 'assistant' z wywołaniami narzędzi
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
 };
 
 // OpenAI Function Calling support — parsed event types
@@ -270,9 +278,14 @@ function createOpenAIFunctionCallingTransform(): TransformStream<string, OpenAIE
       }
     },
     flush(controller) {
-      // Emit any accumulated tool calls
+      // Emit any accumulated tool calls that haven't been emitted yet
+      // Note: We only emit if we have accumulated data that wasn't already sent
+      // via a complete 'tool_call' event during the stream
       for (const [index, toolCall] of toolCallsByIndex.entries()) {
-        if (toolCall.id && toolCall.name) {
+        if (toolCall.id && toolCall.name && toolCall.arguments) {
+          // Only emit if this is genuinely accumulated data
+          // The stream transform already emits complete tool_call events,
+          // so this flush is primarily for cleanup of any partial data
           controller.enqueue({
             type: 'tool_call',
             id: toolCall.id,

@@ -638,11 +638,27 @@ async function streamAssistantResponse(
 
             case 'tool_call':
               // Kompletne wywołanie narzędzia (może przyjść zamiast chunks)
-              toolCallsByIndex.set(event.index, {
-                id: event.id,
-                name: event.name,
-                arguments: event.arguments
-              });
+              // Jeśli wcześniej przyszły tool_call_chunk dla tego indexu,
+              // połącz je z finalnym eventem zamiast nadpisywać.
+              let accumulated = toolCallsByIndex.get(event.index);
+              if (!accumulated) {
+                accumulated = { arguments: '' };
+              }
+              if (event.id) {
+                accumulated.id = event.id;
+              }
+              if (event.name) {
+                accumulated.name = event.name;
+              }
+              if (event.arguments) {
+                // Jeśli były już zebrane argumenty z chunków, dołącz je.
+                if (accumulated.arguments) {
+                  accumulated.arguments += event.arguments;
+                } else {
+                  accumulated.arguments = event.arguments;
+                }
+              }
+              toolCallsByIndex.set(event.index, accumulated);
               console.log(`[streamAssistant] 🤖 Wykryto wywołanie narzędzia: ${event.name}`);
               break;
 
@@ -699,8 +715,43 @@ async function streamAssistantResponse(
               try {
                 args = JSON.parse(argsString!);
               } catch (e) {
-                console.error(`[streamAssistant] ❌ Błąd parsowania argumentów narzędzia ${name}:`, e);
-                args = {};
+                console.error(
+                  `[streamAssistant] ❌ Błąd parsowania argumentów narzędzia ${name}. Surowe argumenty:`,
+                  argsString,
+                  'Błąd:',
+                  e
+                );
+
+                // Zwróć do LLM jawny błąd narzędzia zamiast wywoływać je z pustymi argumentami
+                const toolErrorPayload = {
+                  error: {
+                    type: 'tool_arguments_parse_error',
+                    tool: name,
+                    message: 'Nie udało się zinterpretować argumentów narzędzia jako JSON.',
+                    rawArguments: argsString,
+                  },
+                };
+                const toolResultString = JSON.stringify(toolErrorPayload);
+
+                console.log(
+                  `[streamAssistant] 🛠️ Zwracam błąd narzędzia ${name} do LLM zamiast wykonywać je z niepoprawnymi argumentami.`
+                );
+
+                const toolMessage: GroqMessage = {
+                  role: 'tool',
+                  tool_call_id: id!,
+                  name: name!,
+                  content: toolResultString,
+                };
+                currentMessages.push(toolMessage);
+
+                await stub.fetch('https://session/append', {
+                  method: 'POST',
+                  body: JSON.stringify({ ...toolMessage, ts: now() } as HistoryEntry),
+                });
+
+                // Przejdź do następnego wywołania narzędzia
+                continue;
               }
 
               const toolResult = await callMcpToolDirect(env, name!, args);

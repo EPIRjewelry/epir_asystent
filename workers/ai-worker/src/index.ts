@@ -12,7 +12,7 @@
  * 
  * Endpoints:
  * - POST /stream - Returns SSE stream of text deltas
- * - POST /harmony - Returns SSE stream of HarmonyEvent objects
+ * - POST /function-calling - Returns SSE stream of OpenAIEvent objects
  * - POST /complete - Returns JSON with full response
  * 
  * @see Service Binding docs: https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/
@@ -23,12 +23,21 @@ export type GroqMessage = {
   content: string;
   tool_call_id?: string;
   name?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
 };
 
-export type HarmonyEvent =
+// OpenAI Function Calling support — parsed event types
+export type OpenAIEvent =
   | { type: 'text'; delta: string }
-  | { type: 'tool_call'; name: string; arguments: any }
-  | { type: 'tool_return'; result: any }
+  | { type: 'tool_call'; id: string; name: string; arguments: string; index: number }
+  | { type: 'tool_call_chunk'; id?: string; name?: string; arguments?: string; index: number }
   | { type: 'usage'; prompt_tokens: number; completion_tokens: number };
 
 interface Env {
@@ -53,13 +62,12 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
  * ⚠️ CRITICAL: Model ID is HARDCODED and MUST NOT be changed without authorization.
  * 
  * This model (llama-3.3-70b-versatile) is specifically chosen and configured for:
- * - MoE (Mixture-of-Experts) architecture with 120B parameters
- * - Harmony response format support
+ * - Llama 3.3 70B architecture
+ * - Native OpenAI Function Calling support
  * - Chain-of-Thought reasoning capabilities
  * - Optimized cost/performance ratio via Groq's LPU infrastructure
  * 
- * System prompts, instruction formats, and business logic are designed for THIS model.
- * Changing this value will break the system.
+ * System prompts and tool definitions are designed for OpenAI-compatible function calling.
  * 
  * @constant
  */
@@ -69,26 +77,26 @@ export const GROQ_MODEL_ID = 'llama-3.3-70b-versatile' as const;
 const _MODEL_VERIFICATION: 'llama-3.3-70b-versatile' = GROQ_MODEL_ID;
 
 /**
- * Parse SSE "data:" lines and emit Harmony-like events.
+ * Parse SSE "data:" lines and emit OpenAI Function Calling events.
  */
-function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
+function createOpenAIFunctionCallingTransform(): TransformStream<string, OpenAIEvent> {
   let buffer = '';
-  let inCall = false;
-  let callBuffer = '';
+  const toolCallsByIndex = new Map<number, { id?: string; name?: string; arguments: string }>();
 
-  return new TransformStream<string, HarmonyEvent>({
+  return new TransformStream<string, OpenAIEvent>({
     start() {
       buffer = '';
-      inCall = false;
-      callBuffer = '';
+      toolCallsByIndex.clear();
     },
     transform(chunk, controller) {
       buffer += chunk;
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || '';
+      
       for (const raw of lines) {
         const line = raw.trim();
         if (!line || line === 'data: [DONE]' || line === '[DONE]') continue;
+        
         const payload = line.startsWith('data:') ? line.slice(5).trim() : line;
         let parsed: any = null;
         try {
@@ -97,8 +105,9 @@ function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
           continue;
         }
 
-        const delta = parsed?.choices?.[0]?.delta?.content;
-        const msgContent = parsed?.choices?.[0]?.message?.content;
+        const choice = parsed?.choices?.[0];
+        const delta = choice?.delta;
+        const message = choice?.message;
         const usage = parsed?.usage;
 
         if (usage && typeof usage === 'object') {
@@ -107,49 +116,71 @@ function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
           controller.enqueue({ type: 'usage', prompt_tokens: p, completion_tokens: c });
         }
 
-        const text = typeof delta === 'string' ? delta : (typeof msgContent === 'string' ? msgContent : '');
-        if (!text) continue;
+        if (message?.content && typeof message.content === 'string') {
+          controller.enqueue({ type: 'text', delta: message.content });
+        }
 
-        let remaining = text;
-        while (remaining.length > 0) {
-          if (!inCall) {
-            const startIdx = remaining.indexOf('<|call|>');
-            if (startIdx === -1) {
-              controller.enqueue({ type: 'text', delta: remaining });
-              break;
-            } else {
-              const before = remaining.slice(0, startIdx);
-              if (before) controller.enqueue({ type: 'text', delta: before });
-              remaining = remaining.slice(startIdx + '<|call|>'.length);
-              inCall = true;
-              callBuffer = '';
+        if (delta?.content && typeof delta.content === 'string') {
+          controller.enqueue({ type: 'text', delta: delta.content });
+        }
+
+        if (delta?.tool_calls && Array.isArray(delta.tool_calls)) {
+          for (const toolCallDelta of delta.tool_calls) {
+            const index = toolCallDelta.index ?? 0;
+            
+            let accumulated = toolCallsByIndex.get(index);
+            if (!accumulated) {
+              accumulated = { arguments: '' };
+              toolCallsByIndex.set(index, accumulated);
             }
-          } else {
-            const endIdx = remaining.indexOf('<|end|>');
-            const returnIdx = endIdx === -1 ? remaining.indexOf('<|return|>') : endIdx;
-            if (returnIdx === -1) {
-              callBuffer += remaining;
-              remaining = '';
-            } else {
-              callBuffer += remaining.slice(0, returnIdx);
-              remaining = remaining.slice(returnIdx + (remaining.startsWith('<|return|>', returnIdx) ? '<|return|>'.length : '<|end|>'.length));
-              try {
-                const callObj = JSON.parse(callBuffer);
-                if (callObj && typeof callObj.name === 'string') {
-                  controller.enqueue({ type: 'tool_call', name: callObj.name, arguments: callObj.arguments });
-                } else if (callObj && 'result' in callObj) {
-                  controller.enqueue({ type: 'tool_return', result: callObj.result });
-                }
-              } catch (e) {
-                // Ignore non-JSON
-              }
-              inCall = false;
-              callBuffer = '';
+
+            if (toolCallDelta.id) {
+              accumulated.id = toolCallDelta.id;
             }
+            if (toolCallDelta.function?.name) {
+              accumulated.name = toolCallDelta.function.name;
+            }
+            if (toolCallDelta.function?.arguments) {
+              accumulated.arguments += toolCallDelta.function.arguments;
+            }
+
+            controller.enqueue({
+              type: 'tool_call_chunk',
+              id: toolCallDelta.id,
+              name: toolCallDelta.function?.name,
+              arguments: toolCallDelta.function?.arguments,
+              index
+            });
+          }
+        }
+
+        if (message?.tool_calls && Array.isArray(message.tool_calls)) {
+          for (let i = 0; i < message.tool_calls.length; i++) {
+            const toolCall = message.tool_calls[i];
+            controller.enqueue({
+              type: 'tool_call',
+              id: toolCall.id,
+              name: toolCall.function.name,
+              arguments: toolCall.function.arguments,
+              index: i
+            });
           }
         }
       }
     },
+    flush(controller) {
+      for (const [index, toolCall] of toolCallsByIndex.entries()) {
+        if (toolCall.id && toolCall.name && toolCall.arguments) {
+          controller.enqueue({
+            type: 'tool_call',
+            id: toolCall.id,
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+            index
+          });
+        }
+      }
+    }
   });
 }
 
@@ -193,8 +224,10 @@ export default {
     switch (url.pathname) {
       case '/stream':
         return handleStream(body, env, apiKey);
-      case '/harmony':
-        return handleHarmony(body, env, apiKey);
+      case '/function-calling':
+        return handleFunctionCalling(body, env, apiKey);
+      case '/harmony': // Backward compatibility alias
+        return handleFunctionCalling(body, env, apiKey);
       case '/complete':
         return handleComplete(body, env, apiKey);
       default:
@@ -322,9 +355,9 @@ async function handleStream(
 }
 
 /**
- * POST /harmony - Returns SSE stream of HarmonyEvent objects (JSON lines)
+ * POST /function-calling - Returns SSE stream of OpenAIEvent objects (JSON lines)
  */
-async function handleHarmony(
+async function handleFunctionCalling(
   body: { messages: GroqMessage[]; temperature?: number; max_tokens?: number; top_p?: number },
   env: Env,
   apiKey: string
@@ -353,17 +386,17 @@ async function handleHarmony(
     return new Response(`Groq API error: ${errorBody}`, { status: res.status });
   }
 
-  const harmonyStream = res.body
+  const functionCallingStream = res.body
     .pipeThrough(new TextDecoderStream())
-    .pipeThrough(createHarmonyTransform())
-    .pipeThrough(new TransformStream<HarmonyEvent, string>({
+    .pipeThrough(createOpenAIFunctionCallingTransform())
+    .pipeThrough(new TransformStream<OpenAIEvent, string>({
       transform(event, controller) {
         controller.enqueue(JSON.stringify(event) + '\n');
       }
     }))
     .pipeThrough(new TextEncoderStream());  // Convert string → Uint8Array for Response
 
-  return new Response(harmonyStream, {
+  return new Response(functionCallingStream, {
     headers: {
       'Content-Type': 'application/x-ndjson',
       'Cache-Control': 'no-cache',
