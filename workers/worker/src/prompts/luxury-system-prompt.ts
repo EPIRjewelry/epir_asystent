@@ -1,5 +1,5 @@
 // worker/src/prompts/luxury-system-prompt.ts
-// WERSJA 3.0 — zgodna z natywnymi tool_calls (OpenAI style) dla modelu Llama 3.3 70B (Groq)
+// WERSJA 3.0 — natywne tool_calls (OpenAI style) dla modelu Llama 3.3 70B (Groq)
 
 export const LUXURY_SYSTEM_PROMPT = `
 EPIR Art Jewellery&Gemstone — AI Assistant (POLSKI)
