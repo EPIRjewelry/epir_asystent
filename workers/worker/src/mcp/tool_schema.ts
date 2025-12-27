@@ -120,7 +120,25 @@ const getMostRecentOrderStatusSchema = {
  * @returns Pełny schemat JSON jako string.
  */
 export function generateMcpToolSchema(): string {
-  const tools = [
+  const tools = getMcpToolsArray();
+  // Zwracamy string JSON dla łatwego wstrzyknięcia do promptu LLM (deprecated)
+  return JSON.stringify(tools, null, 2);
+}
+
+/**
+ * Generuje tablicę narzędzi MCP w formacie OpenAI Function Calling.
+ * Ta funkcja powinna być używana zamiast generateMcpToolSchema() dla nowego API.
+ * @returns Tablica narzędzi w formacie OpenAI tools array
+ */
+export function getMcpToolsArray(): Array<{
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: any;
+  };
+}> {
+  return [
     {
       type: "function",
       function: {
@@ -170,9 +188,6 @@ export function generateMcpToolSchema(): string {
       }
     }
   ];
-
-  // Zwracamy string JSON dla łatwego wstrzyknięcia do promptu LLM
-  return JSON.stringify(tools, null, 2);
 }
 
 // Przykład użycia, pokazujący, jak schemat będzie wyglądał w promptcie:
