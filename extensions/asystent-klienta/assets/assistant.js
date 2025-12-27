@@ -287,7 +287,16 @@ async function processSSEStream(
           try { sessionStorage.setItem(sessionIdKey, parsed.session_id); } catch (e) { /* silent */ }
         }
 
-        // Nowa obsĹ‚uga: delta (incremental) lub content (full replacement)
+        // Obsługa natywnych tool_calls (status)
+        if (parsed.tool_call) {
+          const calls = Array.isArray(parsed.tool_call) ? parsed.tool_call : [parsed.tool_call];
+          const names = calls.map((c) => c.name || c.id || 'narzędzie').join(', ');
+          const statusMsg = `Wywołuję narzędzie: ${names}...`;
+          onUpdate(statusMsg, parsed);
+          continue;
+        }
+
+        // Nowa obsługa: delta (incremental) lub content (full replacement)
         if (parsed.delta !== undefined) {
           accumulated += parsed.delta;
           onUpdate(accumulated, parsed);
@@ -309,7 +318,12 @@ async function processSSEStream(
         try {
           const parsed = JSON.parse(dataStr);
           if (parsed.session_id) try { sessionStorage.setItem(sessionIdKey, parsed.session_id); } catch {}
-          if (parsed.delta !== undefined) {
+          if (parsed.tool_call) {
+            const calls = Array.isArray(parsed.tool_call) ? parsed.tool_call : [parsed.tool_call];
+            const names = calls.map((c) => c.name || c.id || 'narzędzie').join(', ');
+            const statusMsg = `Wywołuję narzędzie: ${names}...`;
+            onUpdate(statusMsg, parsed);
+          } else if (parsed.delta !== undefined) {
             accumulated += parsed.delta;
             onUpdate(accumulated, parsed);
           } else if (parsed.content !== undefined) {
@@ -552,5 +566,3 @@ document.addEventListener('DOMContentLoaded', () => {
     console.error('assistant.js DOMContentLoaded submit handler error:', e);
   }
 });
-
-

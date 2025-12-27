@@ -1,45 +1,22 @@
 /**
  * worker/src/config/model-params.ts
- * 
+ *
  * Centralna konfiguracja parametrów modelu AI.
  * Ekstrahowane z ai-client.ts dla łatwego zarządzania i A/B testingu.
- * 
- * ⚠️ CRITICAL: GROQ_MODEL_ID is HARDCODED and IMMUTABLE
- * 
- * Model: openai/gpt-oss-120b
- * - MoE (Mixture-of-Experts) architecture: 128 experts, Top-4 routing
- * - 128k context window
- * - Harmony protocol support (special tokens: <|call|>, <|end|>, <|return|>)
- * - Optimized for luxury e-commerce (jewelry) assistant
- * 
- * DO NOT change GROQ_MODEL_ID without:
- * 1. Owner approval
- * 2. Testing prompt compatibility
- * 3. Verifying Harmony protocol support
- * 4. Updating documentation (README.md, copilot-instructions.md)
- * 
- * @see README.md - Canonical settings section
- * @see .github/copilot-instructions.md - Architecture overview
+ *
+ * Model: llama-3.3-70b-versatile (Groq)
+ * - 70B parameters, długo kontekstu ~128k
+ * - Natywne tool_calls (OpenAI-compatible)
+ * - Optymalizowany pod niskie opóźnienia na infrastrukturze Groq
  */
 
 /**
- * ⚠️ IMMUTABLE: Model ID (DO NOT CHANGE)
- * 
- * This model is specifically chosen for:
- * - MoE architecture (128 experts, Top-4 routing)
- * - Harmony response format support
- * - Chain-of-Thought reasoning capabilities
- * - Optimized cost/performance ratio via Groq's LPU infrastructure
- * 
- * System prompts, instruction formats, and business logic are designed for THIS model.
- * Changing this value will break the system.
- * 
- * @constant
+ * Model ID używany w całym workerze.
  */
-export const GROQ_MODEL_ID = 'openai/gpt-oss-120b' as const;
+export const GROQ_MODEL_ID = 'llama-3.3-70b-versatile' as const;
 
 // Compile-time verification that GROQ_MODEL_ID is not accidentally changed
-const _MODEL_VERIFICATION: 'openai/gpt-oss-120b' = GROQ_MODEL_ID;
+const _MODEL_VERIFICATION: 'llama-3.3-70b-versatile' = GROQ_MODEL_ID;
 
 /**
  * Model parameters for chat completions

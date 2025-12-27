@@ -23,14 +23,13 @@ import { TokenVaultDO, TokenVault } from './token-vault';
 
 // Importy AI i Narzędzi (BEZPOŚREDNIO z ai-client.ts)
 import {
-  streamGroqHarmonyEvents,
-  HarmonyEvent,
+  streamGroqEvents,
   getGroqResponse,
   GroqMessage,
 } from './ai-client';
 import { GROQ_MODEL_ID } from './config/model-params';
 import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt'; // 🟢 Używa nowego promptu v2
-import { generateMcpToolSchema } from './mcp/tool_schema'; // 🟢 Używa poprawionych schematów v2
+import { TOOL_SCHEMAS } from './mcp_tools'; // 🟢 Używa poprawionych schematów v2
 import { callMcpToolDirect, handleMcpRequest } from './mcp_server';
 
 // Importy RAG (teraz używane tylko przez narzędzia, a nie przez index.ts)
@@ -130,14 +129,17 @@ function ensureHistoryArray(input: unknown): HistoryEntry[] {
     if (typeof candidate !== 'object' || candidate === null) continue;
     const raw = candidate as Record<string, unknown>;
     // Zezwalamy na 'tool' role w historii DO
-    if (!isChatRole(raw.role) || !isNonEmptyString(raw.content)) continue;
+    const rawToolCalls = (raw as any).tool_calls;
+    const hasToolCalls = Array.isArray(rawToolCalls) && rawToolCalls.length > 0;
+    const hasContent = isNonEmptyString(raw.content);
+    if (!isChatRole(raw.role) || (!hasContent && !hasToolCalls)) continue;
     const ts = typeof raw.ts === 'number' ? raw.ts : now();
     const entry: HistoryEntry = {
       role: raw.role,
-      content: String(raw.content),
+      content: hasContent ? String(raw.content) : '',
       ts,
     };
-    if (raw.tool_calls) entry.tool_calls = raw.tool_calls;
+    if (hasToolCalls) entry.tool_calls = rawToolCalls;
     if (typeof raw.tool_call_id === 'string') entry.tool_call_id = raw.tool_call_id;
     if (typeof raw.name === 'string') entry.name = raw.name;
     out.push(entry);
@@ -554,14 +556,26 @@ async function streamAssistantResponse(
         .slice(-MAX_HISTORY_FOR_AI) // Weź tylko X ostatnich wiadomości
         .map(h => ({
             role: h.role,
-            content: h.content,
+            content: h.content ?? '',
             ...(h.role === 'tool' && h.name && { name: h.name }),
             ...(h.role === 'tool' && h.tool_call_id && { tool_call_id: h.tool_call_id }),
+            ...(h.tool_calls && { tool_calls: h.tool_calls as any }),
         }));
         
+      const toolDefinitions = Object.values(TOOL_SCHEMAS).map((schema) => ({
+        type: 'function' as const,
+        function: {
+          name: schema.name,
+          description: schema.description,
+          parameters: schema.parameters,
+        },
+      }));
+
+      const toolSchemaString = JSON.stringify(toolDefinitions, null, 2);
+
       const messages: GroqMessage[] = [
         { role: 'system', content: LUXURY_SYSTEM_PROMPT },
-        { role: 'system', content: `Oto dostępne schematy narzędzi:\n${generateMcpToolSchema()}` },
+        { role: 'system', content: `Oto dostępne schematy narzędzi:\n${toolSchemaString}` },
       ];
 
       // Dodaj kontekst systemowy (jeśli istnieje)
@@ -597,7 +611,7 @@ async function streamAssistantResponse(
         throw new Error('AI service temporarily unavailable (Missing GROQ_API_KEY)');
       }
 
-      // 🔴 KROK 4: PĘTLA WYWOŁAŃ NARZĘDZI (HARMONY)
+      // 🔴 KROK 4: PĘTLA WYWOŁAŃ NARZĘDZI (native tool_calls)
       let currentMessages: GroqMessage[] = messages;
       const MAX_TOOL_CALLS = 5;
       
@@ -605,10 +619,11 @@ async function streamAssistantResponse(
       let finalTextResponse = ''; 
 
       for (let i = 0; i < MAX_TOOL_CALLS; i++) {
-        const groqStream = await streamGroqHarmonyEvents(currentMessages, env);
+        const groqStream = await streamGroqEvents(currentMessages, env, toolDefinitions);
         const reader = groqStream.getReader();
-        let toolCallEvent: HarmonyEvent | null = null;
         let iterationText = ''; // Tymczasowy buffer dla tej iteracji
+        const pendingToolCalls = new Map<string, { id: string; name: string; arguments: string }>();
+        let finishReason: string | null = null;
 
         while (true) {
           const { done, value: event } = await reader.read();
@@ -616,78 +631,81 @@ async function streamAssistantResponse(
 
           switch (event.type) {
               case 'text':
-                // Buforujemy tekst z AI zamiast wysyłać go do klienta natychmiast.
-                // Powód: model może prefiksować <|call|> wyjaśnieniami ("myśli"),
-                // a `createHarmonyTransform` emituje część tekstu przed tokenem.
-                // Aby uniknąć wyświetlania „myśli” użytkownikowi, akumulujemy
-                // wszystkie fragmenty `text` w `iterationText` i wysyłamy je
-                // dopiero PO potwierdzeniu, że nie było wywołania narzędzia
-                // w tej iteracji. Jeśli wykryjemy `tool_call`, te "myśli"
-                // zostaną pominięte (nie wyświetlimy ich), co zapobiega
-                // ujawnianiu wewnętrznych rozważań modelu.
                 iterationText += event.delta;
               break;
 
             case 'tool_call':
-              console.log(`[streamAssistant] 🤖 Wykryto wywołanie narzędzia: ${event.name}`);
-              toolCallEvent = event;
+              console.log(`[streamAssistant] 🤖 Wykryto wywołanie narzędzia: ${event.call.name}`);
+              pendingToolCalls.set(event.call.id, event.call);
               break;
 
             case 'usage':
               console.log(`[streamAssistant] 📊 Statystyki użycia: ${JSON.stringify(event)}`);
               break;
-            
-            case 'tool_return':
-                break;
+
+            case 'done':
+              finishReason = event.finish_reason ?? finishReason;
+              break;
           }
         } // koniec while(reader)
 
-        if (toolCallEvent && toolCallEvent.type === 'tool_call') {
-          // TAK - Wywołaj narzędzie
-          const { name, arguments: args } = toolCallEvent;
-          
-          // Zapisz wywołanie narzędzia (asystenta) do DO
-          const toolCallContent = `<|call|>${JSON.stringify({ name, arguments: args })}<|end|>`;
+        const detectedToolCalls = Array.from(pendingToolCalls.values());
+
+        if (detectedToolCalls.length > 0 || finishReason === 'tool_calls') {
+          const toolCallEntries = detectedToolCalls.map((call) => ({
+            id: call.id,
+            type: 'function' as const,
+            function: { name: call.name, arguments: call.arguments },
+          }));
+
           const assistantToolCallEntry: HistoryEntry = {
             role: 'assistant',
-            content: toolCallContent,
-            tool_calls: [{ name, arguments: args }], // Przechowujemy dla logiki DO
+            content: '',
+            tool_calls: toolCallEntries,
             ts: now(),
           };
           await stub.fetch('https://session/append', {
             method: 'POST',
             body: JSON.stringify(assistantToolCallEntry),
           });
-          // Push only fields valid for GroqMessage (without tool_calls)
+
           currentMessages.push({
-            role: assistantToolCallEntry.role,
-            content: assistantToolCallEntry.content,
+            role: 'assistant',
+            content: null,
+            tool_calls: toolCallEntries,
           });
 
-          // Wyślij "myśli" do klienta
-          await sendSSE('status', { message: `Używam narzędzia: ${name}...` });
+          await sendSSE('tool_call', { tool_call: toolCallEntries.map((t) => ({ id: t.id, name: t.function.name })) });
+          await sendSSE('status', { message: `Używam narzędzia: ${toolCallEntries.map((t) => t.function.name).join(', ')}...` });
 
-          // Wykonaj narzędzie
-          console.log(`[streamAssistant] 🛠️ Wykonuję narzędzie: ${name} z argumentami:`, args);
-          const toolResult = await callMcpToolDirect(env, name, args);
-          const toolResultString = JSON.stringify(toolResult.error ? toolResult : toolResult.result);
+          for (const call of detectedToolCalls) {
+            let parsedArgs: any = {};
+            try {
+              parsedArgs = call.arguments ? JSON.parse(call.arguments) : {};
+            } catch (e) {
+              console.warn('[streamAssistant] ⚠️ Nie udało się sparsować argumentów narzędzia, używam pustego obiektu', { error: e, raw: call.arguments });
+              parsedArgs = {};
+            }
 
-          console.log(`[streamAssistant] 🛠️ Wynik narzędzia ${name}: ${toolResultString.substring(0, 100)}...`);
+            console.log(`[streamAssistant] 🛠️ Wykonuję narzędzie: ${call.name} z argumentami:`, parsedArgs);
+            const toolResult = await callMcpToolDirect(env, call.name, parsedArgs);
+            const toolResultString = JSON.stringify(toolResult.error ? toolResult : toolResult.result);
 
-          // Dodaj wynik narzędzia do historii i kontynuuj pętlę
-          const toolMessage: GroqMessage = {
-            role: 'tool',
-            name: name,
-            content: toolResultString,
-            // tool_call_id: ... // Harmony nie polega na ID, tylko na kolejności
-          };
-          currentMessages.push(toolMessage);
-          
-          // Zapisz wynik w DO
-          await stub.fetch('https://session/append', {
-            method: 'POST',
-            body: JSON.stringify({ ...toolMessage, ts: now() } as HistoryEntry),
-          });
+            console.log(`[streamAssistant] 🛠️ Wynik narzędzia ${call.name}: ${toolResultString.substring(0, 100)}...`);
+
+            const toolMessage: GroqMessage = {
+              role: 'tool',
+              name: call.name,
+              tool_call_id: call.id,
+              content: toolResultString,
+            };
+            currentMessages.push(toolMessage);
+            
+            await stub.fetch('https://session/append', {
+              method: 'POST',
+              body: JSON.stringify({ ...toolMessage, ts: now() } as HistoryEntry),
+            });
+          }
           
           // Kontynuuj pętlę for, aby ponownie wywołać AI
           continue; 
