@@ -33,21 +33,14 @@ async function getShopifyCartId() {
     
     return null;
   } catch (err) {
-<<<<<<< HEAD
     // W getShopifyCartId() nie mamy kontekstu wiadomości (message id) ani renderMode.
     // Zgłaszamy błąd do Analytics i zwracamy null, aby chat mógł kontynuować.
     console.error('[Assistant] getShopifyCartId error', err);
-    try { reportUiExtensionError(err, { stage: 'get_cart_id' }); } catch (e) { console.warn('reportUiExtensionError failed', e); }
-    return null;
-  } finally {
-  // kończymy getShopifyCartId()
-}
-=======
-    console.error('Błąd pobierania koszyka:', err);
-    reportUiExtensionError(err, {
-      stage: 'get_cart_id',
-      error_message: err instanceof Error ? err.message : 'Unknown error',
-    });
+    try { 
+      reportUiExtensionError(err, { stage: 'get_cart_id' }); 
+    } catch (e) { 
+      console.warn('reportUiExtensionError failed', e); 
+    }
     return null;
   }
 }
@@ -55,7 +48,6 @@ async function getShopifyCartId() {
 /**
  * Parsuje odpowiedź asystenta i wyodrębnia specjalne akcje
  * Zwraca obiekt z parsed text + extracted actions
->>>>>>> origin/copilot/fix-client-assistant-errors
  */
 function parseAssistantResponse(text) {
   const actions = {
@@ -94,10 +86,7 @@ function parseAssistantResponse(text) {
     }
 
     cleanedText = cleanedText.replace(/\[ORDER_STATUS:[^\]]+\]/, '').trim();
-<<<<<<< HEAD
-=======
   }
->>>>>>> origin/copilot/fix-client-assistant-errors
   
   return { text: cleanedText, actions };
 }
