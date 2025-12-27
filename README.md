@@ -250,7 +250,7 @@ Troubleshooting (częste problemy)
 │  │  • Product views (last 10)                             │
 │  ├─ RAG Worker (Service Binding)                           │
 │  │  └─ Shopify MCP → product catalog, cart, FAQ          │
-│  └─ Groq API (gpt-oss-120b)                                │
+│  └─ Groq API (llama-3.3-70b-versatile)                    │
 │     • Streaming SSE responses                              │
 │     • Tool calling (MCP tools)                             │
 │                                                             │
@@ -367,7 +367,7 @@ Troubleshooting (częste problemy)
 
                          │Jeśli potrzebujesz wyjaśnień lub autoryzacji na zmianę kanonicznych ustawień, skontaktuj się z właścicielem repozytorium/zespołem EPIRjewelry.
 
-                         └─► Groq API (openai/gpt-oss-120b)
+                         └─► Groq API (llama-3.3-70b-versatile)
 
                              - Streaming responses*** EOF
 
@@ -391,10 +391,10 @@ Troubleshooting (częste problemy)
 - **Session DO Integration**: Real-time product view tracking (last 10 views)
 
 ### **2. AI-Powered Chat**
-- **Groq LLM**: `openai/gpt-oss-120b` model (HARDCODED for prompt stability)
+- **Groq LLM**: `llama-3.3-70b-versatile` model (HARDCODED for prompt stability)
 - **Streaming Responses**: Server-Sent Events (SSE) for real-time UI updates
-- **Tool Calling**: MCP tools (search_shop_catalog, get_cart, update_cart, etc.)
-- **Harmony-Style Parsing**: `<|call|>` / `<|end|>` markers for structured responses
+- **Tool Calling**: Native OpenAI Function Calling (search_shop_catalog, get_cart, update_cart, etc.)
+- **Function Calling**: Standard OpenAI-compatible tool_calls format
 
 ### **3. MCP Orchestration**
 - **RAG Worker**: Centralized MCP → Vectorize fallback logic
@@ -416,12 +416,12 @@ These values are **hardcoded** and should NOT be changed without team approval:
 |---------|-------|----------|
 | **SHOP_DOMAIN** | `epir-art-silver-jewellery.myshopify.com` | `workers/*/wrangler.toml` → `[vars]` |
 | **CANONICAL_MCP_URL** | `https://epir-art-silver-jewellery.myshopify.com/api/mcp` | `workers/rag-worker/wrangler.toml` → `[vars]` |
-| **GROQ_MODEL_ID** | `openai/gpt-oss-120b` | `workers/worker/src/ai-client.ts` (const) |
+| **GROQ_MODEL_ID** | `llama-3.3-70b-versatile` | `workers/worker/src/config/model-params.ts` (const) |
 | **MAX_HISTORY** | `30` | `workers/worker/src/index.ts` (SessionDO) |
 | **RATE_LIMIT_MAX_REQUESTS** | `20` | `workers/worker/src/index.ts` (SessionDO) |
 
 **Why immutable?**
-- Prompts and streaming parsers are calibrated for `gpt-oss-120b`
+- Prompts and streaming parsers are calibrated for `llama-3.3-70b-versatile` with OpenAI Function Calling
 - MCP URL is public (no auth required), changing it breaks integration
 - Rate limits prevent abuse of Groq API
 

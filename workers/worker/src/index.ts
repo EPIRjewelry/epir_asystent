@@ -23,14 +23,15 @@ import { TokenVaultDO, TokenVault } from './token-vault';
 
 // Importy AI i Narzędzi (BEZPOŚREDNIO z ai-client.ts)
 import {
-  streamGroqHarmonyEvents,
-  HarmonyEvent,
+  streamGroqFunctionCallEvents,
+  streamGroqHarmonyEvents, // backwards compatibility
+  OpenAIEvent,
   getGroqResponse,
   GroqMessage,
 } from './ai-client';
 import { GROQ_MODEL_ID } from './config/model-params';
-import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt'; // 🟢 Używa nowego promptu v2
-import { generateMcpToolSchema } from './mcp/tool_schema'; // 🟢 Używa poprawionych schematów v2
+import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt';
+import { generateMcpToolSchema, getMcpToolsArray } from './mcp/tool_schema';
 import { callMcpToolDirect, handleMcpRequest } from './mcp_server';
 
 // Importy RAG (teraz używane tylko przez narzędzia, a nie przez index.ts)
@@ -597,111 +598,143 @@ async function streamAssistantResponse(
         throw new Error('AI service temporarily unavailable (Missing GROQ_API_KEY)');
       }
 
-      // 🔴 KROK 4: PĘTLA WYWOŁAŃ NARZĘDZI (HARMONY)
+      // 🟢 KROK 4: PĘTLA WYWOŁAŃ NARZĘDZI (OpenAI Function Calling)
       let currentMessages: GroqMessage[] = messages;
       const MAX_TOOL_CALLS = 5;
+      const tools = getMcpToolsArray(); // Pobierz narzędzia w formacie OpenAI
       
-      // 🔴 FIX: accumulatedResponse poza pętlą - nie resetuj w każdej iteracji
       let finalTextResponse = ''; 
 
       for (let i = 0; i < MAX_TOOL_CALLS; i++) {
-        const groqStream = await streamGroqHarmonyEvents(currentMessages, env);
+        const groqStream = await streamGroqFunctionCallEvents(currentMessages, env, tools);
         const reader = groqStream.getReader();
-        let toolCallEvent: HarmonyEvent | null = null;
-        let iterationText = ''; // Tymczasowy buffer dla tej iteracji
+        
+        // Akumulator dla tool_call_chunk'ów - może być wiele wywołań jednocześnie
+        const toolCallsByIndex = new Map<number, { id?: string; name?: string; arguments: string }>();
+        let iterationText = ''; // Tymczasowy buffer dla tekstu tej iteracji
 
+        // Zbierz wszystkie eventy ze streamu
         while (true) {
           const { done, value: event } = await reader.read();
           if (done) break;
 
           switch (event.type) {
-              case 'text':
-                // Buforujemy tekst z AI zamiast wysyłać go do klienta natychmiast.
-                // Powód: model może prefiksować <|call|> wyjaśnieniami ("myśli"),
-                // a `createHarmonyTransform` emituje część tekstu przed tokenem.
-                // Aby uniknąć wyświetlania „myśli” użytkownikowi, akumulujemy
-                // wszystkie fragmenty `text` w `iterationText` i wysyłamy je
-                // dopiero PO potwierdzeniu, że nie było wywołania narzędzia
-                // w tej iteracji. Jeśli wykryjemy `tool_call`, te "myśli"
-                // zostaną pominięte (nie wyświetlimy ich), co zapobiega
-                // ujawnianiu wewnętrznych rozważań modelu.
-                iterationText += event.delta;
+            case 'text':
+              // Buforujemy tekst z AI - wyślemy go tylko jeśli nie było tool calls
+              iterationText += event.delta;
+              break;
+
+            case 'tool_call_chunk':
+              // Akumuluj fragmenty tool call
+              let accumulated = toolCallsByIndex.get(event.index);
+              if (!accumulated) {
+                accumulated = { arguments: '' };
+                toolCallsByIndex.set(event.index, accumulated);
+              }
+              if (event.id) accumulated.id = event.id;
+              if (event.name) accumulated.name = event.name;
+              if (event.arguments) accumulated.arguments += event.arguments;
               break;
 
             case 'tool_call':
+              // Kompletne wywołanie narzędzia (może przyjść zamiast chunks)
+              toolCallsByIndex.set(event.index, {
+                id: event.id,
+                name: event.name,
+                arguments: event.arguments
+              });
               console.log(`[streamAssistant] 🤖 Wykryto wywołanie narzędzia: ${event.name}`);
-              toolCallEvent = event;
               break;
 
             case 'usage':
               console.log(`[streamAssistant] 📊 Statystyki użycia: ${JSON.stringify(event)}`);
               break;
-            
-            case 'tool_return':
-                break;
           }
         } // koniec while(reader)
 
-        if (toolCallEvent && toolCallEvent.type === 'tool_call') {
-          // TAK - Wywołaj narzędzie
-          const { name, arguments: args } = toolCallEvent;
-          
-          // Zapisz wywołanie narzędzia (asystenta) do DO
-          const toolCallContent = `<|call|>${JSON.stringify({ name, arguments: args })}<|end|>`;
-          const assistantToolCallEntry: HistoryEntry = {
-            role: 'assistant',
-            content: toolCallContent,
-            tool_calls: [{ name, arguments: args }], // Przechowujemy dla logiki DO
-            ts: now(),
-          };
-          await stub.fetch('https://session/append', {
-            method: 'POST',
-            body: JSON.stringify(assistantToolCallEntry),
-          });
-          // Push only fields valid for GroqMessage (without tool_calls)
-          currentMessages.push({
-            role: assistantToolCallEntry.role,
-            content: assistantToolCallEntry.content,
-          });
+        // Sprawdź czy były jakieś tool calls
+        if (toolCallsByIndex.size > 0) {
+          // TAK - Przetwórz wszystkie wywołania narzędzi
+          const completedToolCalls = Array.from(toolCallsByIndex.values())
+            .filter(tc => tc.id && tc.name); // Tylko kompletne
 
-          // Wyślij "myśli" do klienta
-          await sendSSE('status', { message: `Używam narzędzia: ${name}...` });
+          if (completedToolCalls.length > 0) {
+            // Zapisz wiadomość asystenta z tool_calls w formacie OpenAI
+            const assistantToolCallEntry: HistoryEntry = {
+              role: 'assistant',
+              content: '', // OpenAI Function Calling używa pustego content dla tool calls
+              tool_calls: completedToolCalls.map(tc => ({
+                id: tc.id!,
+                type: 'function',
+                function: {
+                  name: tc.name!,
+                  arguments: tc.arguments
+                }
+              })),
+              ts: now(),
+            };
 
-          // Wykonaj narzędzie
-          console.log(`[streamAssistant] 🛠️ Wykonuję narzędzie: ${name} z argumentami:`, args);
-          const toolResult = await callMcpToolDirect(env, name, args);
-          const toolResultString = JSON.stringify(toolResult.error ? toolResult : toolResult.result);
+            await stub.fetch('https://session/append', {
+              method: 'POST',
+              body: JSON.stringify(assistantToolCallEntry),
+            });
 
-          console.log(`[streamAssistant] 🛠️ Wynik narzędzia ${name}: ${toolResultString.substring(0, 100)}...`);
+            // Dodaj do currentMessages (format dla Groq API) - musi zawierać tool_calls
+            currentMessages.push({
+              role: 'assistant',
+              content: '', // OpenAI format: pusty content gdy są tool_calls
+              tool_calls: assistantToolCallEntry.tool_calls
+            });
 
-          // Dodaj wynik narzędzia do historii i kontynuuj pętlę
-          const toolMessage: GroqMessage = {
-            role: 'tool',
-            name: name,
-            content: toolResultString,
-            // tool_call_id: ... // Harmony nie polega na ID, tylko na kolejności
-          };
-          currentMessages.push(toolMessage);
-          
-          // Zapisz wynik w DO
-          await stub.fetch('https://session/append', {
-            method: 'POST',
-            body: JSON.stringify({ ...toolMessage, ts: now() } as HistoryEntry),
-          });
-          
-          // Kontynuuj pętlę for, aby ponownie wywołać AI
-          continue; 
+            // Wykonaj każde narzędzie i dodaj wyniki
+            for (const toolCall of completedToolCalls) {
+              const { id, name, arguments: argsString } = toolCall;
+              
+              await sendSSE('status', { message: `Używam narzędzia: ${name}...` });
 
-        } else {
-          // NIE - To była finalna odpowiedź tekstowa (bez wywołań narzędzi)
-          // Wysyłamy akumulowany tekst do klienta i ustawiamy jako finalny.
-          finalTextResponse = iterationText;
-          if (iterationText) {
-            // Prześlij cały tekst tej iteracji (delta) do klienta w jednym evencie.
-            await sendDelta(iterationText);
+              console.log(`[streamAssistant] 🛠️ Wykonuję narzędzie: ${name} z argumentami:`, argsString);
+              
+              // Parse arguments
+              let args: any;
+              try {
+                args = JSON.parse(argsString!);
+              } catch (e) {
+                console.error(`[streamAssistant] ❌ Błąd parsowania argumentów narzędzia ${name}:`, e);
+                args = {};
+              }
+
+              const toolResult = await callMcpToolDirect(env, name!, args);
+              const toolResultString = JSON.stringify(toolResult.error ? toolResult : toolResult.result);
+
+              console.log(`[streamAssistant] 🛠️ Wynik narzędzia ${name}: ${toolResultString.substring(0, 100)}...`);
+
+              // Dodaj wynik narzędzia w formacie OpenAI (z tool_call_id)
+              const toolMessage: GroqMessage = {
+                role: 'tool',
+                tool_call_id: id!,
+                name: name!,
+                content: toolResultString,
+              };
+              currentMessages.push(toolMessage);
+              
+              // Zapisz wynik w DO
+              await stub.fetch('https://session/append', {
+                method: 'POST',
+                body: JSON.stringify({ ...toolMessage, ts: now() } as HistoryEntry),
+              });
+            }
+            
+            // Kontynuuj pętlę for, aby ponownie wywołać AI
+            continue; 
           }
-          break; // Wyjdź z pętli for
         }
+
+        // NIE - To była finalna odpowiedź tekstowa (bez wywołań narzędzi)
+        finalTextResponse = iterationText;
+        if (iterationText) {
+          await sendDelta(iterationText);
+        }
+        break; // Wyjdź z pętli for
       } // koniec for(MAX_TOOL_CALLS)
 
       // 🔴 KROK 5: FINALIZACJA I ZAPIS

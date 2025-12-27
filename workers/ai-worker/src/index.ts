@@ -52,7 +52,7 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 /**
  * ⚠️ CRITICAL: Model ID is HARDCODED and MUST NOT be changed without authorization.
  * 
- * This model (openai/gpt-oss-120b) is specifically chosen and configured for:
+ * This model (llama-3.3-70b-versatile) is specifically chosen and configured for:
  * - MoE (Mixture-of-Experts) architecture with 120B parameters
  * - Harmony response format support
  * - Chain-of-Thought reasoning capabilities
@@ -63,10 +63,10 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
  * 
  * @constant
  */
-export const GROQ_MODEL_ID = 'openai/gpt-oss-120b' as const;
+export const GROQ_MODEL_ID = 'llama-3.3-70b-versatile' as const;
 
 // Compile-time verification that GROQ_MODEL_ID is not accidentally changed
-const _MODEL_VERIFICATION: 'openai/gpt-oss-120b' = GROQ_MODEL_ID;
+const _MODEL_VERIFICATION: 'llama-3.3-70b-versatile' = GROQ_MODEL_ID;
 
 /**
  * Parse SSE "data:" lines and emit Harmony-like events.
