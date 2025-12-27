@@ -15,11 +15,11 @@ export type GroqMessage = {
   name?: string;           // Opcjonalne dla wiadomości 'tool'
 };
 
-// Harmony streaming support — parsed event types
-export type HarmonyEvent =
+// OpenAI Function Calling support — parsed event types
+export type OpenAIEvent =
   | { type: 'text'; delta: string }
-  | { type: 'tool_call'; name: string; arguments: any }
-  | { type: 'tool_return'; result: any }
+  | { type: 'tool_call'; id: string; name: string; arguments: string; index: number }
+  | { type: 'tool_call_chunk'; id?: string; name?: string; arguments?: string; index: number }
   | { type: 'usage'; prompt_tokens: number; completion_tokens: number };
 
 /**
@@ -166,29 +166,29 @@ export async function streamGroqResponse(
 }
 
 /**
- * Parse SSE "data:" lines coming from an OpenAI-compatible API and emit Harmony-like events.
- * This is a lightweight local parser to detect tool calls embedded as special tokens
- * in content. It does not require external dependencies and is compatible with Groq SSE.
+ * Parse SSE "data:" lines coming from OpenAI-compatible API and emit function calling events.
+ * This parser handles the standard OpenAI tool_calls format including deltas for streaming.
+ * Compatible with Groq SSE streaming format.
  */
-function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
+function createOpenAIFunctionCallingTransform(): TransformStream<string, OpenAIEvent> {
   let buffer = '';
-  // State for capturing tool call JSON between <|call|> ... <|end|>
-  let inCall = false;
-  let callBuffer = '';
+  // State for accumulating tool call deltas per index
+  const toolCallsByIndex = new Map<number, { id?: string; name?: string; arguments: string }>();
 
-  return new TransformStream<string, HarmonyEvent>({
+  return new TransformStream<string, OpenAIEvent>({
     start() {
       buffer = '';
-      inCall = false;
-      callBuffer = '';
+      toolCallsByIndex.clear();
     },
     transform(chunk, controller) {
       buffer += chunk;
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || '';
+      
       for (const raw of lines) {
         const line = raw.trim();
         if (!line || line === 'data: [DONE]' || line === '[DONE]') continue;
+        
         const payload = line.startsWith('data:') ? line.slice(5).trim() : line;
         let parsed: any = null;
         try {
@@ -198,81 +198,107 @@ function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
           continue;
         }
 
-        const delta = parsed?.choices?.[0]?.delta?.content;
-        const msgContent = parsed?.choices?.[0]?.message?.content;
+        const choice = parsed?.choices?.[0];
+        const delta = choice?.delta;
+        const message = choice?.message;
         const usage = parsed?.usage;
 
+        // Handle usage statistics
         if (usage && typeof usage === 'object') {
           const p = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
           const c = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
           controller.enqueue({ type: 'usage', prompt_tokens: p, completion_tokens: c });
         }
 
-        const text = typeof delta === 'string' ? delta : (typeof msgContent === 'string' ? msgContent : '');
-        if (!text) continue;
+        // Handle message content (for non-streaming or final message)
+        if (message?.content && typeof message.content === 'string') {
+          controller.enqueue({ type: 'text', delta: message.content });
+        }
 
-        // Detect Harmony-style markers for tool calls
-        // Example: "...<|call|>{\"name\":\"get_cart\",\"arguments\":{...}}<|end|>..."
-        let remaining = text;
-        while (remaining.length > 0) {
-          if (!inCall) {
-            const startIdx = remaining.indexOf('<|call|>');
-            if (startIdx === -1) {
-              // Emit as pure text
-              controller.enqueue({ type: 'text', delta: remaining });
-              break;
-            } else {
-              // Emit any preceding text, then enter call mode
-              const before = remaining.slice(0, startIdx);
-              if (before) controller.enqueue({ type: 'text', delta: before });
-              remaining = remaining.slice(startIdx + '<|call|>'.length);
-              inCall = true;
-              callBuffer = '';
+        // Handle delta content (streaming text)
+        if (delta?.content && typeof delta.content === 'string') {
+          controller.enqueue({ type: 'text', delta: delta.content });
+        }
+
+        // Handle tool_calls in delta (streaming function calls)
+        if (delta?.tool_calls && Array.isArray(delta.tool_calls)) {
+          for (const toolCallDelta of delta.tool_calls) {
+            const index = toolCallDelta.index ?? 0;
+            
+            // Get or create tool call accumulator for this index
+            let accumulated = toolCallsByIndex.get(index);
+            if (!accumulated) {
+              accumulated = { arguments: '' };
+              toolCallsByIndex.set(index, accumulated);
             }
-          } else {
-            // We're inside a call; look for an end token
-            const endIdx = remaining.indexOf('<|end|>');
-            const returnIdx = endIdx === -1 ? remaining.indexOf('<|return|>') : endIdx;
-            if (returnIdx === -1) {
-              callBuffer += remaining;
-              remaining = '';
-            } else {
-              callBuffer += remaining.slice(0, returnIdx);
-              remaining = remaining.slice(returnIdx + (remaining.startsWith('<|return|>', returnIdx) ? '<|return|>'.length : '<|end|>'.length));
-              // Try to parse tool call JSON
-              try {
-                const callObj = JSON.parse(callBuffer);
-                if (callObj && typeof callObj.name === 'string') {
-                  controller.enqueue({ type: 'tool_call', name: callObj.name, arguments: callObj.arguments });
-                } else if (callObj && 'result' in callObj) {
-                  controller.enqueue({ type: 'tool_return', result: callObj.result });
-                }
-              } catch (e) {
-                // If not JSON, ignore silently
-              }
-              // Exit call mode
-              inCall = false;
-              callBuffer = '';
+
+            // Accumulate the deltas
+            if (toolCallDelta.id) {
+              accumulated.id = toolCallDelta.id;
             }
+            if (toolCallDelta.function?.name) {
+              accumulated.name = toolCallDelta.function.name;
+            }
+            if (toolCallDelta.function?.arguments) {
+              accumulated.arguments += toolCallDelta.function.arguments;
+            }
+
+            // Emit chunk event
+            controller.enqueue({
+              type: 'tool_call_chunk',
+              id: toolCallDelta.id,
+              name: toolCallDelta.function?.name,
+              arguments: toolCallDelta.function?.arguments,
+              index
+            });
+          }
+        }
+
+        // Handle complete tool_calls in message (non-streaming)
+        if (message?.tool_calls && Array.isArray(message.tool_calls)) {
+          for (let i = 0; i < message.tool_calls.length; i++) {
+            const toolCall = message.tool_calls[i];
+            controller.enqueue({
+              type: 'tool_call',
+              id: toolCall.id,
+              name: toolCall.function.name,
+              arguments: toolCall.function.arguments,
+              index: i
+            });
           }
         }
       }
     },
+    flush(controller) {
+      // Emit any accumulated tool calls
+      for (const [index, toolCall] of toolCallsByIndex.entries()) {
+        if (toolCall.id && toolCall.name) {
+          controller.enqueue({
+            type: 'tool_call',
+            id: toolCall.id,
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+            index
+          });
+        }
+      }
+    }
   });
 }
 
 /**
- * Start a Groq streaming request and return a stream of HarmonyEvent objects.
+ * Start a Groq streaming request and return a stream of OpenAI Function Calling events.
  * Consumers can handle text vs tool_call events as needed.
  */
-export async function streamGroqHarmonyEvents(
+export async function streamGroqFunctionCallEvents(
   messages: GroqMessage[],
-  env: Env
-): Promise<ReadableStream<HarmonyEvent>> {
+  env: Env,
+  tools?: any[]
+): Promise<ReadableStream<OpenAIEvent>> {
   const apiKey = env.GROQ_API_KEY;
   if (!apiKey) throw new Error('Missing GROQ_API_KEY secret');
 
-  const payload: GroqPayload = {
+  const payload: GroqPayload & { tools?: any[] } = {
     model: GROQ_MODEL_ID,
     messages,
     stream: true,
@@ -281,6 +307,11 @@ export async function streamGroqHarmonyEvents(
     top_p: MODEL_PARAMS.top_p,
     stream_options: MODEL_PARAMS.stream_options,
   };
+
+  // Add tools if provided
+  if (tools && tools.length > 0) {
+    payload.tools = tools;
+  }
 
   const res = await fetch(GROQ_API_URL, {
     method: 'POST',
@@ -298,11 +329,14 @@ export async function streamGroqHarmonyEvents(
 
   return res.body
     .pipeThrough(new TextDecoderStream())
-    .pipeThrough(createHarmonyTransform());
+    .pipeThrough(createOpenAIFunctionCallingTransform());
 }
 
+// Backwards compatibility alias
+export const streamGroqHarmonyEvents = streamGroqFunctionCallEvents;
+
 // Expose internal helpers for unit tests only
-export const __test = { createHarmonyTransform };
+export const __test = { createOpenAIFunctionCallingTransform };
 
 /**
  * Wykonuje standardowe (non-streaming) zapytanie do Groq.

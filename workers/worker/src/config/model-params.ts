@@ -6,7 +6,7 @@
  * 
  * ⚠️ CRITICAL: GROQ_MODEL_ID is HARDCODED and IMMUTABLE
  * 
- * Model: openai/gpt-oss-120b
+ * Model: llama-3.3-70b-versatile
  * - MoE (Mixture-of-Experts) architecture: 128 experts, Top-4 routing
  * - 128k context window
  * - Harmony protocol support (special tokens: <|call|>, <|end|>, <|return|>)
@@ -23,23 +23,22 @@
  */
 
 /**
- * ⚠️ IMMUTABLE: Model ID (DO NOT CHANGE)
+ * ⚠️ Model ID Configuration
  * 
  * This model is specifically chosen for:
- * - MoE architecture (128 experts, Top-4 routing)
- * - Harmony response format support
+ * - Llama 3.3 70B architecture
+ * - Native OpenAI Function Calling support
  * - Chain-of-Thought reasoning capabilities
  * - Optimized cost/performance ratio via Groq's LPU infrastructure
  * 
- * System prompts, instruction formats, and business logic are designed for THIS model.
- * Changing this value will break the system.
+ * System prompts and tool definitions are designed for OpenAI-compatible function calling.
  * 
  * @constant
  */
-export const GROQ_MODEL_ID = 'openai/gpt-oss-120b' as const;
+export const GROQ_MODEL_ID = 'llama-3.3-70b-versatile' as const;
 
 // Compile-time verification that GROQ_MODEL_ID is not accidentally changed
-const _MODEL_VERIFICATION: 'openai/gpt-oss-120b' = GROQ_MODEL_ID;
+const _MODEL_VERIFICATION: 'llama-3.3-70b-versatile' = GROQ_MODEL_ID;
 
 /**
  * Model parameters for chat completions

@@ -48,6 +48,14 @@ async function getShopifyCartId() {
 /**
  * Parsuje odpowiedź asystenta i wyodrębnia specjalne akcje
  * Zwraca obiekt z parsed text + extracted actions
+ * 
+ * Obsługuje:
+ * - Checkout URLs
+ * - Cart updates (w formacie [CART_UPDATED: ...])
+ * - Order status (w formacie [ORDER_STATUS: ...])
+ * 
+ * NIE obsługuje już starych tagów Harmony (<|call|>, <|end|>)
+ * ponieważ model używa natywnego OpenAI Function Calling
  */
 function parseAssistantResponse(text) {
   const actions = {
@@ -75,7 +83,7 @@ function parseAssistantResponse(text) {
     cleanedText = cleanedText.replace(/\[CART_UPDATED:[^\]]+\]/, '').trim();
   }
   
-  // Wykryj status zamĂłwienia w formacie [ORDER_STATUS: ...]
+  // Wykryj status zamówienia w formacie [ORDER_STATUS: ...]
   const orderStatusMatch = text.match(/\[ORDER_STATUS:([^\]]+)\]/);
   if (orderStatusMatch) {
     actions.hasOrderStatus = true;
@@ -240,7 +248,12 @@ function createUserMessage(messagesEl, text) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-/* Robustny parser SSE/JSONL z obsługą delta (nowy) i content (fallback) */
+/* Robustny parser SSE/JSONL z obsługą delta (nowy) i content (fallback) 
+ * 
+ * WAŻNE: Tool calls są teraz obsługiwane po stronie serwera przez OpenAI Function Calling.
+ * Klient otrzymuje tylko finalne odpowiedzi tekstowe, nie surowe wywołania narzędzi.
+ * System automatycznie wykonuje narzędzia i generuje odpowiedzi przed wysłaniem do klienta.
+ */
 async function processSSEStream(
   body,
   msgId,
