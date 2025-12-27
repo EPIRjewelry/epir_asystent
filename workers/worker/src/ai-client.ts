@@ -1,31 +1,44 @@
 /**
  * worker/src/ai-client.ts
  * Ujednolicony klient do komunikacji z API Groq.
- * Obsługa natywnych tool_calls (OpenAI-compatible) – brak Harmony tagów.
+ * Zastępuje redundantne pliki `groq.ts` i `cloudflare-ai.ts`.
+ * Odpowiedzialność: Wyłącznie obsługa żądań HTTP (streaming i non-streaming) do API.
+ * NIE zawiera logiki biznesowej, budowania promptów ani promptów systemowych.
  */
 
 import { GROQ_MODEL_ID, MODEL_PARAMS, GROQ_API_URL } from './config/model-params';
 
 export type GroqMessage = { 
   role: 'system' | 'user' | 'assistant' | 'tool'; 
-  content: string;
+  content: string | null;
   tool_call_id?: string;  // Opcjonalne dla wiadomości 'tool'
   name?: string;           // Opcjonalne dla wiadomości 'tool'
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
 };
 
-// Streaming event types (tekst i tool_calls)
+// Streaming event types (tekst, wywołanie narzędzia, zwrot, usage)
 export type HarmonyEvent =
   | { type: 'text'; delta: string }
-  | { type: 'tool_call'; name: string; arguments: any }
+  | { type: 'tool_call'; id: string; name: string; arguments: any }
   | { type: 'tool_return'; result: any }
   | { type: 'usage'; prompt_tokens: number; completion_tokens: number };
 
+/**
+ * Interfejs dla środowiska Cloudflare Worker.
+ */
 interface Env {
   GROQ_API_KEY: string;
-  GROQ_PRICE_INPUT_PER_M?: number;
-  GROQ_PRICE_OUTPUT_PER_M?: number;
+  GROQ_PRICE_INPUT_PER_M?: number;   // np. 0.20
+  GROQ_PRICE_OUTPUT_PER_M?: number;  // np. 0.30
 }
 
+/**
+ * Parametry wywołania API Groq.
+ */
 interface GroqPayload {
   model: string;
   messages: GroqMessage[];
@@ -33,9 +46,17 @@ interface GroqPayload {
   temperature?: number;
   max_tokens?: number;
   top_p?: number;
+  // Dla streamingu: poproś o usage w strumieniu (zgodne z OpenAI-compatible API)
   stream_options?: { include_usage?: boolean };
 }
 
+/**
+ * Wykonuje streamingowe zapytanie do Groq i zwraca ReadableStream z tekstem.
+ * @param messages - Tablica wiadomości (system, user, assistant).
+ * @param model - Nazwa modelu (np. 'llama3-70b-8192').
+ * @param env - Środowisko Workera (dla API key).
+ * @returns ReadableStream<string> - Strumień fragmentów tekstu (delta).
+ */
 export async function streamGroqResponse(
   messages: GroqMessage[],
   env: Env
@@ -67,6 +88,8 @@ export async function streamGroqResponse(
     throw new Error(`Groq API error (${res.status}): ${errorBody}`);
   }
 
+  // Parsuj SSE stream z Groq i wyciągaj tylko fragmenty tekstu (delta content)
+  // Dodatkowo: wyłapuj usage i loguj koszt (jeśli dostępne stawki w env)
   let buffer = '';
   let usagePrompt = 0;
   let usageCompletion = 0;
@@ -82,21 +105,24 @@ export async function streamGroqResponse(
           buffer += chunk;
           const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() || '';
+          
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed || trimmed === 'data: [DONE]' || trimmed === '[DONE]') continue;
+            
             const prefix = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed;
             try {
               const parsed = JSON.parse(prefix);
               const content = parsed?.choices?.[0]?.delta?.content;
               const messageContent = parsed?.choices?.[0]?.message?.content;
               const usage = parsed?.usage;
+              
               if (typeof content === 'string' && content) {
                 controller.enqueue(content);
               } else if (typeof messageContent === 'string' && messageContent) {
                 controller.enqueue(messageContent);
-              }
-              if (usage && typeof usage === 'object') {
+              } else if (usage && typeof usage === 'object') {
+                // Zapisz usage do logowania przy flush
                 const p = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
                 const c = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
                 if (!Number.isNaN(p)) usagePrompt = p;
@@ -104,7 +130,7 @@ export async function streamGroqResponse(
                 sawUsage = true;
               }
             } catch (e) {
-              // ignore
+              // Ignoruj nieparsowalne fragmenty
             }
           }
         },
@@ -118,8 +144,11 @@ export async function streamGroqResponse(
               if (typeof content === 'string' && content) {
                 controller.enqueue(content);
               }
-            } catch (e) {}
+            } catch (e) {
+              // Ignoruj błędy przy finalnym flushowaniu
+            }
           }
+          // Po zakończeniu streamu — zaloguj usage i opcjonalnie koszt
           if (sawUsage) {
             try {
               const inM = env.GROQ_PRICE_INPUT_PER_M;
@@ -142,14 +171,19 @@ export async function streamGroqResponse(
 }
 
 /**
- * Transform stream dla natywnych tool_calls (OpenAI-compatible) → HarmonyEvent
+ * Parser SSE dla natywnych tool_calls (OpenAI-compatible) z Groq.
+ * Zwraca zdarzenia tekstowe, wywołania narzędzi i usage.
  */
-function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
+function createNativeToolCallTransform(): TransformStream<string, HarmonyEvent> {
   let buffer = '';
+  const argBuffers = new Map<string, string>();
+  const nameBuffers = new Map<string, string>();
 
   return new TransformStream<string, HarmonyEvent>({
     start() {
       buffer = '';
+      argBuffers.clear();
+      nameBuffers.clear();
     },
     transform(chunk, controller) {
       buffer += chunk;
@@ -162,45 +196,46 @@ function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
         let parsed: any = null;
         try {
           parsed = JSON.parse(payload);
-        } catch {
+        } catch (_e) {
           continue;
         }
 
-        const choice = parsed?.choices?.[0];
-        const delta = choice?.delta || {};
-        const message = choice?.message || {};
+        const delta = parsed?.choices?.[0]?.delta;
+        const message = parsed?.choices?.[0]?.message;
         const usage = parsed?.usage;
 
-        // usage
         if (usage && typeof usage === 'object') {
           const p = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
           const c = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
           controller.enqueue({ type: 'usage', prompt_tokens: p, completion_tokens: c });
         }
 
-        // tool_calls (delta)
-        const toolCalls = delta.tool_calls || message.tool_calls || [];
-        if (Array.isArray(toolCalls)) {
-          for (const tc of toolCalls) {
-            const name = tc?.function?.name || tc?.name;
-            let args: any = tc?.function?.arguments || tc?.arguments;
-            if (typeof args === 'string') {
-              try {
-                args = JSON.parse(args);
-              } catch {
-                // keep raw string
-              }
-            }
-            if (name) {
-              controller.enqueue({ type: 'tool_call', name, arguments: args });
-            }
-          }
+        // Tekstowe delty
+        const textDelta = typeof delta?.content === 'string' ? delta.content : (typeof message?.content === 'string' ? message.content : '');
+        if (textDelta) {
+          controller.enqueue({ type: 'text', delta: textDelta });
         }
 
-        // text deltas
-        const content = delta.content ?? message.content;
-        if (typeof content === 'string' && content) {
-          controller.enqueue({ type: 'text', delta: content });
+        // Obsługa tool_calls (streaming argumentów)
+        const toolCalls = delta?.tool_calls || message?.tool_calls || [];
+        for (const tc of toolCalls) {
+          const id = tc.id || `tool_${argBuffers.size + 1}`;
+          const func = tc.function || {};
+          const namePart = typeof func.name === 'string' ? func.name : nameBuffers.get(id) || '';
+          if (namePart) nameBuffers.set(id, namePart);
+
+          if (typeof func.arguments === 'string') {
+            const accumulated = (argBuffers.get(id) || '') + func.arguments;
+            argBuffers.set(id, accumulated);
+            // Spróbuj sparsować, gdy stanowi pełny JSON
+            try {
+              const parsedArgs = JSON.parse(accumulated);
+              controller.enqueue({ type: 'tool_call', id, name: namePart || 'unknown_tool', arguments: parsedArgs });
+              argBuffers.delete(id);
+            } catch (_e) {
+              // cząstkowe fragmenty — czekamy na kolejne delty
+            }
+          }
         }
       }
     },
@@ -209,6 +244,7 @@ function createHarmonyTransform(): TransformStream<string, HarmonyEvent> {
 
 /**
  * Start a Groq streaming request and return a stream of HarmonyEvent objects.
+ * Consumers can handle text vs tool_call events as needed.
  */
 export async function streamGroqHarmonyEvents(
   messages: GroqMessage[],
@@ -243,11 +279,19 @@ export async function streamGroqHarmonyEvents(
 
   return res.body
     .pipeThrough(new TextDecoderStream())
-    .pipeThrough(createHarmonyTransform());
+    .pipeThrough(createNativeToolCallTransform());
 }
 
-export const __test = { createHarmonyTransform };
+// Expose internal helpers for unit tests only
+export const __test = { createNativeToolCallTransform };
 
+/**
+ * Wykonuje standardowe (non-streaming) zapytanie do Groq.
+ * @param messages - Tablica wiadomości (system, user, assistant).
+ * @param model - Nazwa modelu (np. 'llama3-70b-8192').
+ * @param env - Środowisko Workera (dla API key).
+ * @returns Pełna odpowiedź tekstowa (content) od modelu.
+ */
 export async function getGroqResponse(
   messages: GroqMessage[],
   env: Env
@@ -281,6 +325,7 @@ export async function getGroqResponse(
   const json: any = await res.json().catch(() => null);
   const content = json?.choices?.[0]?.message?.content;
 
+  // Logowanie usage + koszt (jeśli dostępne)
   try {
     const usage = json?.usage || {};
     const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
@@ -299,7 +344,7 @@ export async function getGroqResponse(
     }
   } catch {}
 
-  if (!content) {
+  if (content === undefined || content === null) {
     throw new Error('Groq API returned an empty or invalid response');
   }
 
