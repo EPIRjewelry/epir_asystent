@@ -464,7 +464,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
   
   if (!body || typeof body.type !== 'string') {
     console.error('[ANALYTICS_WORKER] ❌ Invalid payload - body:', body);
-    return json({ ok: false, error: 'Invalid payload' }, 400);
+    return json({ ok: false, error: 'Invalid payload' }, 400, corsHeaders(request, env));
   }
   
   console.log('[ANALYTICS_WORKER] 📊 Event type:', body.type);
@@ -808,17 +808,20 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     // ============================================================================
     // CUSTOMER SESSION TRACKING & AI ANALYSIS
     // ============================================================================
+    // Insert event to customer_events table for journey tracking
+    await insertCustomerEvent(env.DB, customerId, sessionId, eventType, timestamp, {
+      pageUrl,
+      pageTitle,
+      productId,
+      productTitle,
+      variantId,
+      cartToken: cartId,
+    });
+    
     // Upsert customer session and trigger AI analysis for behavior scoring
     let activateChat = false;
-      // Insert event to customer_events table for journey tracking
-      await insertCustomerEvent(env.DB, customerId, sessionId, eventType, timestamp, {
-        pageUrl,
-        pageTitle,
-        productId,
-        productTitle,
-        variantId,
-        cartToken: cartId,
-      });
+    if (customerId && sessionId) {
+      await upsertCustomerSession(env.DB, customerId, sessionId, timestamp);
       
       // Get current event count for this session
       const sessionData = await env.DB
@@ -873,6 +876,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
           }
         }
       }
+    }
     
     // ============================================================================
     // INTEGRATION: Analytics Worker → Session DO (product view tracking)
@@ -916,7 +920,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
       ok: true, 
       activate_chat: activateChat,
       reason: activateChat ? 'high_engagement_score' : null
-    }, 200);
+    }, 200, corsHeaders(request, env));
   } catch (e) {
     console.error('[ANALYTICS_WORKER] ❌ Insert failed with error:', e);
     console.error('[ANALYTICS_WORKER] ❌ Error details:', {
@@ -925,7 +929,7 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
       eventType: body.type
     });
     // Don't expose internal error details to the client for security reasons
-    return json({ ok: false, error: 'insert_failed' }, 500);
+    return json({ ok: false, error: 'insert_failed' }, 500, corsHeaders(request, env));
   }
 }
 
@@ -1182,5 +1186,3 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
 };
-
-
