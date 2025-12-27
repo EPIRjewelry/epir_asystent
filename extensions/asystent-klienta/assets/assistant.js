@@ -1,8 +1,8 @@
-﻿// Przywrócona wersja z backupu (UTF-8, poprawne polskie znaki)
+// Przywrócona wersja z backupu (UTF-8, poprawne polskie znaki)
 // Przywrócona wersja z backupu (UTF-8, poprawne polskie znaki)
 // extensions/asystent-klienta/assets/chat.ts
-// Lekki, poprawiony klient czatu z obsĹ‚ugÄ… streaming SSE/JSON + fallback.
-// Kompiluj do JS (np. tsc) przed uĹĽyciem w Theme App Extension.
+// Lekki, poprawiony klient czatu z obsługą streaming SSE/JSON + fallback.
+// Kompiluj do JS (np. tsc) przed użyciem w Theme App Extension.
 
 /* ===== CART INTEGRATION ===== */
 
@@ -61,6 +61,13 @@ function parseAssistantResponse(text) {
   
   let cleanedText = text;
   
+  // Wyczyść ewentualne markery Harmony/tool_call (fallback) zanim pokażemy userowi
+  cleanedText = cleanedText
+    .replace(/<\|call\|>[\s\S]*?<\|end\|>/g, '')
+    .replace(/<\|return\|>[\s\S]*?<\|end\|>/g, '')
+    .replace(/<\|.*?\|>/g, '')
+    .trim();
+  
   // Wykryj checkout URL
   const checkoutUrlMatch = text.match(/https:\/\/[^\s]+\/checkouts\/[^\s]+/);
   if (checkoutUrlMatch) {
@@ -75,7 +82,7 @@ function parseAssistantResponse(text) {
     cleanedText = cleanedText.replace(/\[CART_UPDATED:[^\]]+\]/, '').trim();
   }
   
-  // Wykryj status zamĂłwienia w formacie [ORDER_STATUS: ...]
+  // Wykryj status zamówienia w formacie [ORDER_STATUS: ...]
   const orderStatusMatch = text.match(/\[ORDER_STATUS:([^\]]+)\]/);
   if (orderStatusMatch) {
     actions.hasOrderStatus = true;
@@ -198,7 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-/* Typy - usuniÄ™te dla kompatybilnoĹ›ci z przeglÄ…darkÄ… (TypeScript â†’ JavaScript) */
+/* Typy - usunięte dla kompatybilności z przeglądarką (TypeScript → JavaScript) */
 // type MessageElement = { id; el };
 // type StreamPayload = { content?; delta?; session_id?; error?; done? };
 
@@ -227,7 +234,7 @@ function finalizeAssistantMessage(id) {
   const el = document.getElementById(id);
   if (!el) return;
   el.classList.remove('msg-typing');
-  // accessibility: usuĹ„ aria-busy jeĹ›li ustawione, pozostaw role=status
+  // accessibility: usuń aria-busy jeśli ustawione, pozostaw role=status
   el.removeAttribute('aria-busy');
   el.setAttribute('role', 'status');
 }
@@ -258,13 +265,13 @@ async function processSSEStream(
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
-      // Procesuj peĹ‚ne eventy (oddzielone pustÄ… liniÄ…)
+      // Procesuj pełne eventy (oddzielone pustą linią)
       let index;
       while ((index = buffer.indexOf('\n\n')) !== -1) {
         const rawEvent = buffer.slice(0, index);
         buffer = buffer.slice(index + 2);
 
-        // ZĹ‚ĂłĹĽ wszystkie linie 'data:' w rawEvent
+        // Złóż wszystkie linie 'data:' w rawEvent
         const lines = rawEvent.split(/\r?\n/);
         const dataLines = lines.filter((l) => l.startsWith('data:')).map((l) => l.slice(5));
         const dataStr = dataLines.join('\n').trim();
@@ -278,7 +285,7 @@ async function processSSEStream(
         } catch (e) {
           console.error('SSE JSON parse error', e, dataStr);
               reportUiExtensionError(e, { stage: 'parse_sse', stream_chunk: dataStr.slice(0, 500) });
-          throw new Error('BĹ‚Ä…d komunikacji: otrzymano nieprawidĹ‚owe dane strumienia.');
+          throw new Error('Błąd komunikacji: otrzymano nieprawidłowe dane strumienia.');
         }
 
         if (parsed.error) throw new Error(parsed.error);
@@ -309,7 +316,7 @@ async function processSSEStream(
       }
     }
 
-    // Po zakoĹ„czeniu odczytu: sprĂłbuj przetworzyÄ‡ pozostaĹ‚oĹ›ci w bufferze
+    // Po zakończeniu odczytu: spróbuj przetworzyć pozostałości w bufferze
     if (buffer.trim()) {
       const lines = buffer.split(/\r?\n/);
       const dataLines = lines.filter((l) => l.startsWith('data:')).map((l) => l.slice(5));
@@ -372,7 +379,7 @@ async function sendMessageToWorker(
   let chunks = 0;
 
   try {
-    // Pobierz cart_id z Shopify przed wysĹ‚aniem
+    // Pobierz cart_id z Shopify przed wysłaniem
     const cartId = await getShopifyCartId();
     console.log('[Assistant] Cart ID:', cartId);
     
@@ -386,7 +393,7 @@ async function sendMessageToWorker(
       body: JSON.stringify({
         message: text,
         session_id: (() => { try { return sessionStorage.getItem(sessionIdKey); } catch { return null; } })(),
-        cart_id: cartId, // WyĹ›lij cart_id w sesji
+        cart_id: cartId, // Wyślij cart_id w sesji
         stream: true,
       }),
       signal: controller.signal,
@@ -395,7 +402,7 @@ async function sendMessageToWorker(
     if (!res.ok) {
       const errText = await (async () => { try { return await res.text(); } catch { return ''; } })();
       console.error('Server error:', res.status, errText);
-      throw new Error(`Serwer zwrĂłciĹ‚ bĹ‚Ä…d (${res.status}).`);
+      throw new Error(`Serwer zwrócił błąd (${res.status}).`);
     }
 
     const contentType = res.headers.get('content-type') || '';
@@ -410,19 +417,19 @@ async function sendMessageToWorker(
           firstChunkAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         }
         
-        // Parsuj odpowiedĹş i wykryj akcje (checkout URL, cart updates)
+        // Parsuj odpowiedź i wykryj akcje (checkout URL, cart updates)
         const { text: cleanedText, actions } = parseAssistantResponse(accumulated);
         if (renderMode === 'growing') {
           updateAssistantMessage(msgId, cleanedText);
         } // in 'dots' mode we keep the initial '...' until stream completes
         
-        // Zapisz akcje do renderowania po zakoĹ„czeniu streamu
+        // Zapisz akcje do renderowania po zakończeniu streamu
         if (actions.hasCheckoutUrl || actions.hasCartUpdate || actions.hasOrderStatus) {
           lastParsedActions = actions;
         }
       });
     } else if (hasStreamAPI && contentType.includes('application/ndjson')) {
-      // ewentualne inne formy newline-delimited json - moĹĽna dodaÄ‡ parser
+      // ewentualne inne formy newline-delimited json - można dodać parser
       await processSSEStream(res.body, msgId, sessionIdKey, (content, parsed) => {
         accumulated = content;
         chunks += 1;
@@ -438,12 +445,12 @@ async function sendMessageToWorker(
         }
       });
     } else {
-      // fallback JSON (serwer buforuje / starsze przeglÄ…darki)
-      const data = await res.json().catch((e) => { throw new Error('NieprawidĹ‚owa odpowiedĹş serwera.'); });
+      // fallback JSON (serwer buforuje / starsze przeglądarki)
+      const data = await res.json().catch((e) => { throw new Error('Nieprawidłowa odpowiedź serwera.'); });
       if (data.error) throw new Error(data.error);
-      accumulated = (data.reply) || 'Otrzymano pustÄ… odpowiedĹş.';
+      accumulated = (data.reply) || 'Otrzymano pustą odpowiedź.';
       
-      // Parsuj odpowiedĹş w trybie non-streaming
+      // Parsuj odpowiedź w trybie non-streaming
       const { text: cleanedText, actions } = parseAssistantResponse(accumulated);
       updateAssistantMessage(msgId, cleanedText);
       if (actions.hasCheckoutUrl || actions.hasCartUpdate || actions.hasOrderStatus) {
