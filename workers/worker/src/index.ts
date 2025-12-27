@@ -3,17 +3,9 @@
 /**
  * GŁÓWNY PLIK WORKERA (epir-art-jewellery-worker)
  *
- * WERSJA POPRAWIONA (Naprawia Błędy Intencji i Utraty Sesji)
- *
- * Ta wersja implementuje kluczowe poprawki:
- * 1.  **POPRAWKA UTRATY SESJI:** Natychmiast wysyła 'session_id' do klienta
- * przez dedykowany event SSE 'session', co zapewnia stanowość.
- * 2.  **POPRAWKA INTENCJI/RAG:** Usunięto agresywną logikę RAG z `handleChat`.
- * Teraz to AI decyduje, kiedy wywołać narzędzia (jak search_shop_catalog)
- * zgodnie z logiką w nowym prompcie Harmony.
- * 3.  **POPRAWKA HARMONY:** `streamAssistantResponse` poprawnie wywołuje
- * `streamGroqHarmonyEvents` (zamiast streamGroqResponse) i implementuje
- * pełną pętlę wywołań narzędzi (tool-calling loop).
+ * WERSJA zoptymalizowana pod Llama 3.3 (Groq) z natywnymi tool_calls
+ * - pełny streaming
+ * - pętla wywołań narzędzi oparta na OpenAI tool_calls (bez Harmony <|call|>)
  */
 
 // Importy bezpieczeństwa i DO
@@ -29,8 +21,8 @@ import {
   GroqMessage,
 } from './ai-client';
 import { GROQ_MODEL_ID } from './config/model-params';
-import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt'; // 🟢 Używa nowego promptu v2
-import { generateMcpToolSchema } from './mcp/tool_schema'; // 🟢 Używa poprawionych schematów v2
+import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt';
+import { generateMcpToolSchema } from './mcp/tool_schema';
 import { callMcpToolDirect, handleMcpRequest } from './mcp_server';
 
 // Importy RAG (teraz używane tylko przez narzędzia, a nie przez index.ts)
@@ -48,15 +40,20 @@ import { getCart, getMostRecentOrderStatus } from './shopify-mcp-client';
 // Typy sesji i żądań
 type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
-interface HistoryEntry {
+type StoredToolCall = {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: any };
+};
+
+type HistoryEntry = {
   role: ChatRole;
-  content: string;
+  content: string | null;
   ts: number;
-  // Pola Harmony (przechowywane w DO, ale filtrowane przed wysłaniem do AI)
-  tool_calls?: any;
+  tool_calls?: StoredToolCall[];
   tool_call_id?: string;
   name?: string;
-}
+};
 
 interface ChatRequestBody {
   message: string;
@@ -91,12 +88,9 @@ const RATE_LIMIT_MAX_REQUESTS = 20;
 const MAX_HISTORY_FOR_AI = 20; // Ogranicz liczbę wiadomości wysyłanych do AI
 const MAX_HISTORY_IN_DO = 200; // Ogranicz przechowywanie w DO
 
-// --- Funkcje pomocnicze i parsery (bez zmian) ---
+// --- Funkcje pomocnicze i parsery ---
 function now(): number {
   return Date.now();
-}
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
 }
 function isChatRole(value: unknown): value is ChatRole {
   return value === 'user' || value === 'assistant' || value === 'system' || value === 'tool';
@@ -104,7 +98,7 @@ function isChatRole(value: unknown): value is ChatRole {
 function parseChatRequestBody(input: unknown): ChatRequestBody | null {
   if (typeof input !== 'object' || input === null) return null;
   const maybe = input as Record<string, unknown>;
-  if (!isNonEmptyString(maybe.message)) return null;
+  if (typeof maybe.message !== 'string' || maybe.message.trim().length === 0) return null;
   const sessionId = typeof maybe.session_id === 'string' && maybe.session_id.length > 0 ? maybe.session_id : undefined;
   const cartId = typeof maybe.cart_id === 'string' && maybe.cart_id.length > 0 ? maybe.cart_id : undefined;
   const stream = typeof maybe.stream === 'boolean' ? maybe.stream : true; // Domyślnie włączamy stream
@@ -129,15 +123,15 @@ function ensureHistoryArray(input: unknown): HistoryEntry[] {
   for (const candidate of input) {
     if (typeof candidate !== 'object' || candidate === null) continue;
     const raw = candidate as Record<string, unknown>;
-    // Zezwalamy na 'tool' role w historii DO
-    if (!isChatRole(raw.role) || !isNonEmptyString(raw.content)) continue;
+    if (!isChatRole(raw.role)) continue;
     const ts = typeof raw.ts === 'number' ? raw.ts : now();
+    const content = raw.content === null ? null : (typeof raw.content === 'string' ? raw.content : '');
     const entry: HistoryEntry = {
       role: raw.role,
-      content: String(raw.content),
+      content,
       ts,
     };
-    if (raw.tool_calls) entry.tool_calls = raw.tool_calls;
+    if (Array.isArray(raw.tool_calls)) entry.tool_calls = raw.tool_calls as StoredToolCall[];
     if (typeof raw.tool_call_id === 'string') entry.tool_call_id = raw.tool_call_id;
     if (typeof raw.name === 'string') entry.name = raw.name;
     out.push(entry);
@@ -161,10 +155,8 @@ function cors(env: Env, request?: Request): Record<string, string> {
       allowOrigin = 'null';
     } else {
       console.warn(`[worker] ⚠️ Rejected Origin (not whitelisted): ${requestOrigin}`);
-      // keep allowOrigin as '*', so browser with disallowed origin will block
     }
   } else if (!requestOrigin && allowedOrigins.length === 1 && allowedOrigins[0] !== '*') {
-    // No Origin header (e.g., file://, mobile webviews). If a single whitelist is set, mirror it for predictability.
     allowOrigin = allowedOrigins[0];
   }
 
@@ -224,11 +216,10 @@ export class SessionDO {
     // POST /append
     if (method === 'POST' && pathname.endsWith('/append')) {
       const payload = (await request.json().catch(() => null)) as HistoryEntry | null;
-      if (!payload || !isChatRole(payload.role) || (payload.content === undefined && !payload.tool_calls)) { // Zezwól na content lub tool_calls
+      if (!payload || !isChatRole(payload.role) || (payload.content === undefined && !payload.tool_calls)) {
         return new Response('Bad Request', { status: 400 });
       }
-      // Upewnij się, że content to string, nawet jeśli jest pusty (dla tool_calls)
-      if (payload.content === undefined) payload.content = ""; 
+      if (payload.content === undefined) payload.content = null;
       await this.append(payload);
       return new Response('ok');
     }
@@ -296,7 +287,6 @@ export class SessionDO {
       if (used) {
         return new Response(JSON.stringify({ used: true }), { status: 200 });
       }
-      // Store with expiration (10 minutes) - use alarm or manual cleanup if needed
       await this.state.storage.put(key, true);
       return new Response(JSON.stringify({ used: false }), { status: 200 });
     }
@@ -388,7 +378,6 @@ export class SessionDO {
 
 // ============================================================================
 // GŁÓWNY HANDLER CZATU (handleChat)
-// ZMIENIONY: Usuwa logikę RAG, zawsze wywołuje streaming.
 // ============================================================================
 async function handleChat(request: Request, env: Env): Promise<Response> {
   const payload = parseChatRequestBody(await request.json().catch(() => null));
@@ -396,12 +385,10 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     return new Response('Bad Request: message required', { status: 400, headers: cors(env, request) });
   }
 
-  // [TOKEN VAULT] Bez zmian
   const url = new URL(request.url);
   const customerId = url.searchParams.get('logged_in_customer_id') || null;
   const shopId = url.searchParams.get('shop') || env.SHOP_DOMAIN;
   
-  // 🔴 POPRAWKA SESJI: Używamy `payload.session_id` LUB generujemy nowy
   const sessionId = payload.session_id ?? crypto.randomUUID();
   const doId = env.SESSION_DO.idFromName(sessionId);
   const stub = env.SESSION_DO.get(doId);
@@ -422,10 +409,8 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     console.log('[handleChat] ⚠️ TokenVault: SKIPPED (customer not logged in or missing shop)');
   }
 
-  // (Optional) If we recognized customerId, fetch customer profile (firstName) and store to SessionDO.
   if (customerId && stub) {
     try {
-      // Call a helper in shopify-mcp-client to fetch firstName and lastName
       const { getCustomerById } = await import('./shopify-mcp-client');
       const customer = await getCustomerById(env, customerId);
       if (customer && (customer.firstName || customer.lastName)) {
@@ -441,7 +426,6 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     }
   }
 
-  // 🔴 POPRAWKA SESJI: Jeśli sesja jest NOWA, zapisujemy jej ID w DO
   if (!payload.session_id) {
       await stub.fetch('https://session/set-session-id', {
           method: 'POST',
@@ -450,14 +434,12 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       });
   }
 
-  // Zapisz wiadomość użytkownika w DO
   await stub.fetch('https://session/append', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role: 'user', content: payload.message, ts: now() } as HistoryEntry),
   });
 
-  // Zapisz cart_id w DO, jeśli dostarczono
   if (payload.cart_id) {
     console.log('[handleChat] Saving cart_id to session:', payload.cart_id);
     await stub.fetch('https://session/set-cart-id', {
@@ -467,7 +449,6 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  // [GREETING PREFILTER] Bez zmian - dobra optymalizacja
   const greetingCheck = payload.message.toLowerCase().trim();
   const greetingPattern = /^(cześć|czesc|hej|witaj|witam|dzień dobry|dzien dobry|dobry wieczór|dobry wieczor|hi|hello|hey)$/i;
   const isShortGreeting = greetingCheck.length < 15 && greetingPattern.test(greetingCheck);
@@ -480,19 +461,13 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       body: JSON.stringify({ role: 'assistant', content: greetingReply, ts: now() } as HistoryEntry),
     });
 
-    // 🔴 POPRAWKA SESJI: Zwróć greeting, ale DOŁĄCZ session_id, aby klient mógł ją zapisać
-    // (W trybie non-stream; w trybie stream jest to obsługiwane przez streamAssistantResponse)
     if (!payload.stream) {
         return new Response(JSON.stringify({ reply: greetingReply, session_id: sessionId }), {
           headers: { ...cors(env), 'Content-Type': 'application/json' },
         });
     }
-    // Jeśli stream=true, przejdź do streamAssistantResponse
   }
   
-  // 🔴 ZMIANA: Usunięto logikę `else` (non-streaming).
-  // Zakładamy, że frontend *zawsze* obsługuje streaming (co jest prawdą wg assistant.js).
-  // Zawsze wywołujemy `streamAssistantResponse`, który teraz zawiera pełną logikę Harmony.
   if (!payload.stream) {
       console.warn("[handleChat] Otrzymano żądanie non-stream, ale kod jest zoptymalizowany pod streaming. Uruchamiam stream mimo wszystko.");
   }
@@ -502,8 +477,7 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 }
 
 // ============================================================================
-// HANDLER STREAMINGU (streamAssistantResponse)
-// KRYTYCZNA AKTUALIZACJA: Pełna implementacja pętli wywołań narzędzi (Harmony).
+// HANDLER STREAMINGU (streamAssistantResponse) — natywne tool_calls
 // ============================================================================
 async function streamAssistantResponse(
   request: Request,
@@ -516,47 +490,46 @@ async function streamAssistantResponse(
   const { readable, writable } = new TransformStream();
   const encoder = new TextEncoder();
 
-  // Uruchamiamy całą logikę asynchronicznie, aby natychmiast zwrócić stream
   (async () => {
     const writer = writable.getWriter();
-    let history: HistoryEntry[] = []; // Historia dla tej tury
-    let accumulatedResponse = ''; // Pełna odpowiedź tekstowa asystenta
+    let history: HistoryEntry[] = [];
+    let accumulatedResponse = '';
 
-    // Funkcja pomocnicza do wysyłania eventów SSE
     async function sendSSE(event: string, data: object | string) {
         const payload = typeof data === 'string' ? data : JSON.stringify(data);
         await writer.write(encoder.encode(`event: ${event}\ndata: ${payload}\n\n`));
     }
-    // Funkcja pomocnicza do wysyłania fragmentów tekstu
     async function sendDelta(delta: string) {
         await writer.write(encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`));
     }
 
     try {
-      // 🔴 KROK 1: POPRAWKA SESJI
-      // Natychmiast wyślij klientowi ID sesji, aby mógł je zapisać.
       console.log(`[streamAssistant] Inicjalizacja strumienia dla sesji: ${sessionId}`);
       await sendSSE('session', { session_id: sessionId });
 
-      // 🔴 KROK 2: POBIERZ HISTORIĘ I KONTEKST
       const historyResp = await stub.fetch('https://session/history');
       const historyData = await historyResp.json().catch(() => []);
-      history = ensureHistoryArray(historyData); // Pełna historia (z rolami 'tool')
+      history = ensureHistoryArray(historyData);
 
       const cartIdResp = await stub.fetch('https://session/cart-id');
       const cartIdData = (await cartIdResp.json().catch(() => ({ cart_id: null }))) as { cart_id?: string | null };
       const cartId = cartIdData.cart_id;
 
-      // 🔴 KROK 3: ZBUDUJ WIADOMOŚCI DLA AI (Z LOGIKĄ RAG WORKER)
-      
-      // Filtrujemy historię, aby usunąć pola, których AI nie rozumie
-      const aiHistory = history
-        .slice(-MAX_HISTORY_FOR_AI) // Weź tylko X ostatnich wiadomości
-        .map(h => ({
-            role: h.role,
-            content: h.content,
-            ...(h.role === 'tool' && h.name && { name: h.name }),
-            ...(h.role === 'tool' && h.tool_call_id && { tool_call_id: h.tool_call_id }),
+      const aiHistory: GroqMessage[] = history
+        .slice(-MAX_HISTORY_FOR_AI)
+        .map((h) => ({
+          role: h.role,
+          content: h.content ?? null,
+          ...(h.role === 'tool' && h.name ? { name: h.name } : {}),
+          ...(h.role === 'tool' && h.tool_call_id ? { tool_call_id: h.tool_call_id } : {}),
+          ...(h.role === 'assistant' && h.tool_calls ? { tool_calls: h.tool_calls.map(tc => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: {
+              name: tc.function?.name,
+              arguments: typeof tc.function?.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function?.arguments ?? {}),
+            }
+          })) } : {}),
         }));
         
       const messages: GroqMessage[] = [
@@ -564,7 +537,6 @@ async function streamAssistantResponse(
         { role: 'system', content: `Oto dostępne schematy narzędzi:\n${generateMcpToolSchema()}` },
       ];
 
-      // Dodaj kontekst systemowy (jeśli istnieje)
       if (cartId) {
         messages.push({ role: 'system', content: `Kontekst systemowy: Aktualny cart_id sesji to: ${cartId}` });
       }
@@ -572,43 +544,30 @@ async function streamAssistantResponse(
         messages.push({ role: 'system', content: `Kontekst systemowy: Klient jest zalogowany. Jego anonimowy token to: ${customerToken}` });
       }
 
-      // 🔴 KROK 3b: ZDELEGUJ LOGIKĘ RAG DO RAG_WORKER
-      // Zamiast błędnie wykonywać RAG tutaj, pozwalamy AI zdecydować, czy go potrzebuje.
-      // Jeśli AI wywoła `search_shop_catalog` lub `search_shop_policies_and_faqs`,
-      // `callMcpToolDirect` w `mcp_server.ts` poprawnie wywoła `RAG_WORKER`.
-      
-      // W `index.ts` (stara wersja) była błędna logika RAG. Teraz jej nie ma.
-      // AI samo zdecyduje o wywołaniu narzędzi RAG (search_..._catalog/policies).
-
       messages.push(...aiHistory);
-      // Wiadomość użytkownika (ostatnia) jest już w `aiHistory`
 
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       console.log(`[streamAssistant] Rozpoczynam pętlę AI. Sesja: ${sessionId}`);
-      console.log('[streamAssistant] 🤖 Model (HARDCODED):', GROQ_MODEL_ID);
+      console.log('[streamAssistant] 🤖 Model:', GROQ_MODEL_ID);
       console.log('[streamAssistant] 📜 System Prompt length:', LUXURY_SYSTEM_PROMPT.length, 'chars');
       console.log('[streamAssistant] 📚 History entries:', aiHistory.length);
       console.log('[streamAssistant] 📨 Total messages (do AI):', messages.length);
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-      // Weryfikacja klucza Groq
       const groqKey = typeof env.GROQ_API_KEY === 'string' ? env.GROQ_API_KEY.trim() : '';
       if (!groqKey) {
         throw new Error('AI service temporarily unavailable (Missing GROQ_API_KEY)');
       }
 
-      // 🔴 KROK 4: PĘTLA WYWOŁAŃ NARZĘDZI (HARMONY)
       let currentMessages: GroqMessage[] = messages;
       const MAX_TOOL_CALLS = 5;
-      
-      // 🔴 FIX: accumulatedResponse poza pętlą - nie resetuj w każdej iteracji
-      let finalTextResponse = ''; 
+      let finalTextResponse = '';
 
       for (let i = 0; i < MAX_TOOL_CALLS; i++) {
         const groqStream = await streamGroqHarmonyEvents(currentMessages, env);
         const reader = groqStream.getReader();
         let toolCallEvent: HarmonyEvent | null = null;
-        let iterationText = ''; // Tymczasowy buffer dla tej iteracji
+        let iterationText = '';
 
         while (true) {
           const { done, value: event } = await reader.read();
@@ -616,15 +575,6 @@ async function streamAssistantResponse(
 
           switch (event.type) {
               case 'text':
-                // Buforujemy tekst z AI zamiast wysyłać go do klienta natychmiast.
-                // Powód: model może prefiksować <|call|> wyjaśnieniami ("myśli"),
-                // a `createHarmonyTransform` emituje część tekstu przed tokenem.
-                // Aby uniknąć wyświetlania „myśli” użytkownikowi, akumulujemy
-                // wszystkie fragmenty `text` w `iterationText` i wysyłamy je
-                // dopiero PO potwierdzeniu, że nie było wywołania narzędzia
-                // w tej iteracji. Jeśli wykryjemy `tool_call`, te "myśli"
-                // zostaną pominięte (nie wyświetlimy ich), co zapobiega
-                // ujawnianiu wewnętrznych rozważań modelu.
                 iterationText += event.delta;
               break;
 
@@ -636,79 +586,74 @@ async function streamAssistantResponse(
             case 'usage':
               console.log(`[streamAssistant] 📊 Statystyki użycia: ${JSON.stringify(event)}`);
               break;
-            
             case 'tool_return':
-                break;
+              break;
           }
-        } // koniec while(reader)
+        }
 
         if (toolCallEvent && toolCallEvent.type === 'tool_call') {
-          // TAK - Wywołaj narzędzie
-          const { name, arguments: args } = toolCallEvent;
-          
-          // Zapisz wywołanie narzędzia (asystenta) do DO
-          const toolCallContent = `<|call|>${JSON.stringify({ name, arguments: args })}<|end|>`;
+          const { id, name, arguments: args } = toolCallEvent;
+
           const assistantToolCallEntry: HistoryEntry = {
             role: 'assistant',
-            content: toolCallContent,
-            tool_calls: [{ name, arguments: args }], // Przechowujemy dla logiki DO
+            content: null,
+            tool_calls: [{ id: id || 'call_1', type: 'function', function: { name, arguments: args } }],
             ts: now(),
           };
           await stub.fetch('https://session/append', {
             method: 'POST',
             body: JSON.stringify(assistantToolCallEntry),
           });
-          // Push only fields valid for GroqMessage (without tool_calls)
+
           currentMessages.push({
             role: assistantToolCallEntry.role,
-            content: assistantToolCallEntry.content,
+            content: null,
+            tool_calls: [
+              {
+                id: id || 'call_1',
+                type: 'function',
+                function: {
+                  name,
+                  arguments: JSON.stringify(args ?? {}),
+                },
+              },
+            ],
           });
 
-          // Wyślij "myśli" do klienta
           await sendSSE('status', { message: `Używam narzędzia: ${name}...` });
 
-          // Wykonaj narzędzie
           console.log(`[streamAssistant] 🛠️ Wykonuję narzędzie: ${name} z argumentami:`, args);
           const toolResult = await callMcpToolDirect(env, name, args);
           const toolResultString = JSON.stringify(toolResult.error ? toolResult : toolResult.result);
 
           console.log(`[streamAssistant] 🛠️ Wynik narzędzia ${name}: ${toolResultString.substring(0, 100)}...`);
 
-          // Dodaj wynik narzędzia do historii i kontynuuj pętlę
           const toolMessage: GroqMessage = {
             role: 'tool',
             name: name,
+            tool_call_id: id || 'call_1',
             content: toolResultString,
-            // tool_call_id: ... // Harmony nie polega na ID, tylko na kolejności
           };
           currentMessages.push(toolMessage);
-          
-          // Zapisz wynik w DO
           await stub.fetch('https://session/append', {
             method: 'POST',
             body: JSON.stringify({ ...toolMessage, ts: now() } as HistoryEntry),
           });
-          
-          // Kontynuuj pętlę for, aby ponownie wywołać AI
+
           continue; 
 
         } else {
-          // NIE - To była finalna odpowiedź tekstowa (bez wywołań narzędzi)
-          // Wysyłamy akumulowany tekst do klienta i ustawiamy jako finalny.
           finalTextResponse = iterationText;
           if (iterationText) {
-            // Prześlij cały tekst tej iteracji (delta) do klienta w jednym evencie.
             await sendDelta(iterationText);
           }
-          break; // Wyjdź z pętli for
+          break;
         }
-      } // koniec for(MAX_TOOL_CALLS)
+      }
 
-      // 🔴 KROK 5: FINALIZACJA I ZAPIS
       console.log('[streamAssistant] ✅ Strumień zakończony. Finalna odpowiedź (tekst):', finalTextResponse.substring(0, 100));
       await writer.write(encoder.encode('data: [DONE]\n\n'));
 
-      // Zapisz finalną odpowiedź asystenta do DO
       if (finalTextResponse.trim()) {
         await stub.fetch('https://session/append', {
           method: 'POST',
@@ -732,9 +677,8 @@ async function streamAssistantResponse(
     } finally {
       writer.close();
     }
-  })(); // koniec bloku async
+  })();
 
-  // Natychmiast zwróć strumień do klienta
   return new Response(readable, {
     headers: {
       ...cors(env, request),
@@ -756,96 +700,75 @@ export default {
 
     const url = new URL(request.url);
 
-    // Proxy analytics endpoints (/pixel, /pixel/count, /pixel/events) to analytics-worker
     if (url.pathname === '/pixel' || url.pathname.startsWith('/pixel/')) {
-      // CORS for pixel endpoints: allow all origins (analytics events)
+      if (!env.RAG_WORKER) {
+        return new Response('analytics-worker not configured', { status: 500 });
+      }
+      return env.RAG_WORKER.fetch(request);
+    }
+
+    if (url.pathname === '/proxy') {
+      const authHeader = request.headers.get('X-Shop-Signature');
+      const timestamp = request.headers.get('X-Shop-Timestamp');
+      const allowedOrigin = env.ALLOWED_ORIGIN || env.ALLOWED_ORIGINS || '*';
+      const corsHeaders = {
+        'Access-Control-Allow-Origin': allowedOrigin,
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Signature, X-Shop-Timestamp',
+      };
+
       if (request.method === 'OPTIONS') {
-        return new Response(null, {
-          status: 200,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-          },
+        return new Response(null, { status: 204, headers: corsHeaders });
+      }
+
+      if (!authHeader || !timestamp) {
+        return new Response(JSON.stringify({ error: 'Missing required headers' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
-      const targetBase = 'https://epir-analityc-worker.krzysztofdzugaj.workers.dev';
-      const targetUrl = `${targetBase}${url.pathname}${url.search}`;
-      const proxyRequest = new Request(targetUrl, request);
-      const proxied = await fetch(proxyRequest);
-      const headers = new Headers(proxied.headers);
-      headers.set('Access-Control-Allow-Origin', '*');
-      headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-      headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-      return new Response(proxied.body, {
-        status: proxied.status,
-        statusText: proxied.statusText,
-        headers,
+      const signature = authHeader;
+      const validSignature = verifyAppProxyHmac(request, env.SHOPIFY_APP_SECRET);
+      if (!validSignature) {
+        return new Response(JSON.stringify({ error: 'Invalid signature' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const replayResponse = await replayCheck(request, env);
+      if (replayResponse) {
+        return new Response(JSON.stringify({ error: 'Replay attack detected' }), {
+          status: 409,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const originHeader = request.headers.get('Origin');
+      if (originHeader && allowedOrigin !== '*' && allowedOrigin.split(',').map(o => o.trim()).indexOf(originHeader) === -1) {
+        return new Response(JSON.stringify({ error: 'Origin not allowed' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const proxiedResponse = await env.RAG_WORKER.fetch(request);
+      const proxiedBody = await proxiedResponse.text();
+      return new Response(proxiedBody, {
+        status: proxiedResponse.status,
+        headers: { ...corsHeaders, 'Content-Type': proxiedResponse.headers.get('Content-Type') || 'application/json' },
       });
     }
 
-    // Healthcheck
-    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/ping' || url.pathname === '/health')) {
-      return new Response('ok', { status: 200, headers: cors(env, request) });
-    }
-
-    // [BEZPIECZEŃSTWO] Globalny strażnik HMAC dla App Proxy
-    if (url.pathname.startsWith('/apps/assistant/') && request.method === 'POST') {
-      if (!env.SHOPIFY_APP_SECRET) {
-        return new Response('Server misconfigured', { status: 500, headers: cors(env, request) });
-      }
-      
-      const result = await verifyAppProxyHmac(request.clone(), env.SHOPIFY_APP_SECRET);
-      if (!result.ok) {
-        console.warn('HMAC verification failed:', result.reason);
-        return new Response('Unauthorized: Invalid HMAC signature', { status: 401, headers: cors(env, request) });
-      }
-
-      // [BEZPIECZEŃSTWO] Replay protection
-      const signature = url.searchParams.get('signature') ?? request.headers.get('x-shopify-hmac-sha256') ?? '';
-      const timestamp = url.searchParams.get('timestamp') ?? '';
-      if (signature && timestamp) {
-        const doId = env.SESSION_DO.idFromName('replay-protection-global');
-        const stub = env.SESSION_DO.get(doId);
-        const replayResult = await replayCheck(stub, signature, timestamp);
-        if (!replayResult.ok) {
-          console.warn('Replay check failed:', replayResult.reason);
-          return new Response('Unauthorized: Signature already used', { status: 401, headers: cors(env, request) });
-        }
-      }
-    }
-
-    // Endpoint czatu (zabezpieczony przez App Proxy)
-    if (url.pathname === '/apps/assistant/chat' && request.method === 'POST') {
+    if (url.pathname === '/chat') {
       return handleChat(request, env);
     }
 
-    // Endpoint czatu (lokalny, deweloperski - bez HMAC)
-    if (url.pathname === '/chat' && request.method === 'POST') {
-      return handleChat(request, env);
-    }
-
-    // Endpoint serwera MCP (JSON-RPC 2.0)
-    if (request.method === 'POST' && (url.pathname === '/mcp/tools/call' || url.pathname === '/apps/assistant/mcp')) {
+    if (url.pathname.startsWith('/mcp')) {
       return handleMcpRequest(request, env);
     }
 
     return new Response('Not Found', { status: 404, headers: cors(env, request) });
   },
-};
-
-// Eksportujemy klasy DO, aby Cloudflare mógł je rozpoznać
-export { RateLimiterDO } from './rate-limiter';
-export { TokenVaultDO } from './token-vault';
-
-// Eksporty dla testów (jeśli używane)
-export {
-  parseChatRequestBody,
-  ensureHistoryArray,
-  cors,
-  handleChat,
-  verifyAppProxyHmac,
-  handleMcpRequest,
-  getGroqResponse,
 };
