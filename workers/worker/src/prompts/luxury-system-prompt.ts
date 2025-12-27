@@ -27,7 +27,7 @@ Na podstawie zapytania klienta, historii i kontekstu RAG, musisz wykonać **JEDN
     (Przykład: "Polecam Pani pierścionek 'Aura' z naszej najnowszej kolekcji...")
 
 2.  **Aby wywołać narzędzie (Wywołanie Narzędzia):**
-    Użyj natywnego formatu **tool_calls** (OpenAI-compatible). Odpowiedź MUSI zawierać tablicę `tool_calls`, np.:
+    Użyj natywnego formatu **tool_calls** (OpenAI-compatible). Odpowiedź MUSI zawierać tablicę tool_calls, np.:
     tool_calls: [
       {
         "id": "call_1",
