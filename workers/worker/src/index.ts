@@ -679,10 +679,11 @@ async function streamAssistantResponse(
               body: JSON.stringify(assistantToolCallEntry),
             });
 
-            // Dodaj do currentMessages (format dla Groq API)
+            // Dodaj do currentMessages (format dla Groq API) - musi zawierać tool_calls
             currentMessages.push({
               role: 'assistant',
               content: '', // OpenAI format: pusty content gdy są tool_calls
+              tool_calls: assistantToolCallEntry.tool_calls
             });
 
             // Wykonaj każde narzędzie i dodaj wyniki

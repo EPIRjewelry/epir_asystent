@@ -7,7 +7,8 @@ import type { GroqMessage } from '../src/ai-client';
  * After migration from Harmony protocol to native OpenAI Function Calling,
  * this test validates the correct structure for tool calls in messages.
  * 
- * According to OpenAI/Groq API spec, tool_calls must follow this format:
+ * According to OpenAI Function Calling spec (as implemented in Groq's API),
+ * tool_calls must follow this format:
  * - Assistant messages WITH tool calls: include tool_calls array
  * - Tool result messages: include tool_call_id and name
  * 

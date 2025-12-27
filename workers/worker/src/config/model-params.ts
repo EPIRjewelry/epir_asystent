@@ -7,9 +7,9 @@
  * ⚠️ CRITICAL: GROQ_MODEL_ID is HARDCODED and IMMUTABLE
  * 
  * Model: llama-3.3-70b-versatile
- * - MoE (Mixture-of-Experts) architecture: 128 experts, Top-4 routing
+ * - Llama 3.3 70B architecture
+ * - Native OpenAI Function Calling support
  * - 128k context window
- * - Harmony protocol support (special tokens: <|call|>, <|end|>, <|return|>)
  * - Optimized for luxury e-commerce (jewelry) assistant
  * 
  * DO NOT change GROQ_MODEL_ID without:
