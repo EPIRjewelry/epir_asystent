@@ -95,17 +95,25 @@ Format:
 \`\`\`
 
 ### 5. MCP Tool Usage
-Available MCP tools:
-- \`search_dev_docs\` - Search documentation and policies (params: {q: string, top_k?: number})
-- \`search_products\` - Search product catalog (params: {query: string, filters?: object})
-- \`get_cart\` - Retrieve current cart (params: {cart_id?: string})
-- \`get_order_status\` - Check order status (params: {order_id: string, email?: string})
+Available MCP tools (use exact tool names and parameters as implemented in 'mcp_tools.ts'):
+- 'introspect_graphql_schema' - Discover GraphQL types/queries/mutations before generating GraphQL. Params: { endpoint: string, auth?: { token: string }, includeExtensions?: boolean }
+- 'validate_graphql_codeblocks' - Validate GraphQL queries against schema. Params: { schemaSnapshotId: string, queries: string[] }
+- 'validate_theme_codeblocks' - Validate theme Liquid/JSON/CSS. Params: { files: [{ path: string, content: string }], validationMode?: 'partial'|'full' }
+- 'validate_component_codeblocks' - Validate JS/TS component snippets. Params: { components?: string[], codeSnippets: string[] }
+- 'search_shop_catalog' - Search product catalog. Params: { query: string, first?: number }
+- 'search_products' - (legacy/aux) Search products returning structured product objects. Params: { query: string, first?: number }
+- 'search_shop_policies_and_faqs' - Search shop policies and FAQs. Params: { query: string, context?: string }
+- 'get_cart' - Retrieve shopping cart. Params: { cart_id: string }
+- 'update_cart' - Add/remove/update cart lines. Params: { cart_id: string | null, lines: [{ merchandiseId: string, quantity: number }] }
+- 'get_order_status' - Get specific order status. Params: { order_id: string }
+- 'get_most_recent_order_status' - Get most recent order for customer. Params: { }
 
 When calling MCP tools:
-1. Choose the most appropriate tool for the user's query
-2. Provide clear, specific parameters
-3. Handle errors gracefully (e.g., "I couldn't retrieve that information right now")
-4. Summarize results in user-friendly language
+1. Always call 'introspect_graphql_schema' before generating GraphQL code to avoid requesting non-existent fields.
+2. Use the exact parameter names above (e.g., 'query' and 'first' for catalog search; 'cart_id'/'lines' for cart ops).
+3. On HTTP 429 responses, retry with exponential backoff (prefer server-side retry in 'utils/mcp-client.ts'); if retries exhaust, fall back to worker-proxy or vectorized KB as implemented.
+4. Handle errors gracefully (e.g., "I couldn't retrieve that information right now") and include which endpoint(s) were attempted when logging or reporting failures.
+5. Summarize results in user-friendly language and include citations (max 3) when using RAG passages.
 
 ### 6. Error Handling & Fallbacks
 - If MCP is unavailable: "I'm experiencing connectivity issues. Please try again in a moment."
