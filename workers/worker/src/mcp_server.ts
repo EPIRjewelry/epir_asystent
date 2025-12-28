@@ -309,15 +309,27 @@ export async function callMcpToolDirect(env: any, toolName: string, args: any): 
 
   // Try internal worker MCP as a fallback
   if (workerOrigin) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     try {
       const workerUrl = `${String(workerOrigin).replace(/\/$/, '')}/mcp/tools/call`;
       const res = await fetch(workerUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Origin: originHeader },
-        body: JSON.stringify(rpc)
+        body: JSON.stringify(rpc),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
+        if (isSearchCatalogTool && res.status === 522) {
+          console.warn('Worker MCP returned 522 for search_shop_catalog; returning fallback response', {
+            toolName,
+            status: res.status,
+            statusText: res.statusText,
+            body: body.slice(0, 500),
+          });
+          return { result: catalogFallbackResult };
+        }
         console.warn('Worker MCP returned non-OK response', {
           toolName,
           status: res.status,
@@ -332,8 +344,21 @@ export async function callMcpToolDirect(env: any, toolName: string, args: any): 
         return { result: j.result };
       }
     } catch (err) {
+      const isAbortError = err instanceof Error && err.name === 'AbortError';
+      const isNetworkError = err instanceof TypeError;
+      if (isSearchCatalogTool && (isAbortError || isNetworkError)) {
+        console.warn('Worker MCP fetch aborted or network error for search_shop_catalog; returning fallback response', {
+          toolName,
+          error: err,
+          timestamp: new Date().toISOString(),
+        });
+        return { result: catalogFallbackResult };
+      }
       console.warn('callMcpToolDirect: worker MCP proxy failed:', err);
       lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    finally {
+      clearTimeout(timeoutId);
     }
   }
 
