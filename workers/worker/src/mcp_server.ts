@@ -230,11 +230,19 @@ export async function callMcpToolDirect(env: any, toolName: string, args: any): 
 
   const shopDomain = env?.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
   const workerOrigin = env?.WORKER_ORIGIN;
+  const originHeader = env?.ALLOWED_ORIGIN || workerOrigin || 'https://asystent.epirbizuteria.pl';
+  const isSearchCatalogTool = toolName === 'search_shop_catalog';
+  const catalogFallbackResult = {
+    products: [],
+    system_note: 'Sklep jest chwilowo niedostępny (Connection Timeout). Poinformuj klienta o problemie technicznym.'
+  };
 
   let lastError: Error | null = null;
 
   // Ensure shop MCP is always prioritized
   if (shopDomain) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     try {
       const shopUrl = `https://${String(shopDomain).replace(/\/$/, '')}/api/mcp`;
       console.log(`Attempting shop MCP connection for tool: ${toolName}`, {
@@ -244,10 +252,29 @@ export async function callMcpToolDirect(env: any, toolName: string, args: any): 
       });
       const res = await fetch(shopUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Origin: originHeader },
         body: JSON.stringify(rpc),
+        signal: controller.signal,
       });
-      if (res.ok) {
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        if (isSearchCatalogTool && res.status === 522) {
+          console.warn('Shop MCP returned 522 for search_shop_catalog; returning fallback response', {
+            toolName,
+            status: res.status,
+            statusText: res.statusText,
+            body: body.slice(0, 500),
+          });
+          return { result: catalogFallbackResult };
+        }
+        console.warn('Shop MCP returned non-OK response', {
+          toolName,
+          status: res.status,
+          statusText: res.statusText,
+          body: body.slice(0, 1000),
+        });
+        lastError = new Error(`Shop MCP ${res.status} ${res.statusText}: ${body}`);
+      } else {
         const j = await res.json().catch(() => null) as any;
         if (j && !j.error) {
           console.log(`Shop MCP success for tool: ${toolName}`, {
@@ -256,13 +283,27 @@ export async function callMcpToolDirect(env: any, toolName: string, args: any): 
           });
           return { result: j.result };
         }
+        lastError = new Error('Shop MCP returned invalid JSON payload');
       }
     } catch (err) {
+      const isAbortError = err instanceof Error && err.name === 'AbortError';
+      const isNetworkError = err instanceof TypeError;
+      if (isSearchCatalogTool && (isAbortError || isNetworkError)) {
+        console.warn('Shop MCP fetch aborted or network error for search_shop_catalog; returning fallback response', {
+          toolName,
+          error: err,
+          timestamp: new Date().toISOString(),
+        });
+        return { result: catalogFallbackResult };
+      }
       console.warn(`Shop MCP failed for tool: ${toolName}, falling back`, {
         error: err,
         timestamp: new Date().toISOString(),
       });
       lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -272,14 +313,23 @@ export async function callMcpToolDirect(env: any, toolName: string, args: any): 
       const workerUrl = `${String(workerOrigin).replace(/\/$/, '')}/mcp/tools/call`;
       const res = await fetch(workerUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Origin: originHeader },
         body: JSON.stringify(rpc)
       });
-      if (res.ok) {
-        const j = await res.json().catch(() => null) as any;
-        if (j && !j.error) {
-          return { result: j.result };
-        }
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.warn('Worker MCP returned non-OK response', {
+          toolName,
+          status: res.status,
+          statusText: res.statusText,
+          body: body.slice(0, 1000),
+        });
+        lastError = new Error(`Worker MCP ${res.status} ${res.statusText}: ${body}`);
+        throw lastError;
+      }
+      const j = await res.json().catch(() => null) as any;
+      if (j && !j.error) {
+        return { result: j.result };
       }
     } catch (err) {
       console.warn('callMcpToolDirect: worker MCP proxy failed:', err);
