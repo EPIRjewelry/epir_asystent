@@ -845,7 +845,10 @@ export default {
     }
 
     // Endpoint serwera MCP (JSON-RPC 2.0)
-    if (request.method === 'POST' && (url.pathname === '/mcp/tools/call' || url.pathname === '/apps/assistant/mcp')) {
+    if (
+      request.method === 'POST' &&
+      (url.pathname === '/mcp/tools/call' || url.pathname === '/mcp/tools/list' || url.pathname === '/apps/assistant/mcp')
+    ) {
       return handleMcpRequest(request, env);
     }
 
