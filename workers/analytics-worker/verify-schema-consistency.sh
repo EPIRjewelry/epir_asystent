@@ -17,9 +17,15 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # Check if we're in the right directory
 if [[ ! -f "src/index.ts" ]] || [[ ! -f "schema-pixel-events-base.sql" ]]; then
-    echo -e "${RED}❌ Error: Must run from workers/analytics-worker directory${NC}"
+    echo -e "${RED}❌ Error: Required files not found${NC}"
+    echo -e "${YELLOW}💡 Hint: This script expects to find src/index.ts and schema-pixel-events-base.sql${NC}"
+    echo -e "${YELLOW}💡 Hint: Current directory: $(pwd)${NC}"
     exit 1
 fi
 
@@ -80,10 +86,14 @@ done
 # Check 5: Verify v3-heatmap file is marked as deprecated
 echo ""
 echo "📋 Checking schema-pixel-events-v3-heatmap.sql status..."
-if grep -q "DEPRECATED" schema-pixel-events-v3-heatmap.sql; then
-    echo -e "${GREEN}✅ v3-heatmap file is marked as DEPRECATED${NC}"
+if [[ -f "schema-pixel-events-v3-heatmap.sql" ]]; then
+    if grep -q "DEPRECATED" schema-pixel-events-v3-heatmap.sql; then
+        echo -e "${GREEN}✅ v3-heatmap file is marked as DEPRECATED${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Warning: v3-heatmap file should be marked as DEPRECATED${NC}"
+    fi
 else
-    echo -e "${YELLOW}⚠️  Warning: v3-heatmap file should be marked as DEPRECATED${NC}"
+    echo -e "${GREEN}✅ v3-heatmap file has been removed (expected for clean deployments)${NC}"
 fi
 
 # Final summary
