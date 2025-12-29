@@ -290,7 +290,7 @@ export async function buildRagContext(
 
   // Fallback: Use local searchProductCatalogWithMCP
   console.log('[RAG Wrapper] Using local rag.ts for context build');
-  const productContext = await LocalRAG.searchProductCatalogWithMCP(query, env.SHOP_DOMAIN || 'epir-art-silver-jewellery.myshopify.com');
+  const productContext = await LocalRAG.searchProductCatalogWithMCP(query, env.SHOP_DOMAIN || '');
   
   // searchProductCatalogWithMCP returns string or object, need to wrap in RagSearchResult
   if (typeof productContext === 'string') {

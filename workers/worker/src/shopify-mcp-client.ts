@@ -6,13 +6,36 @@
  * Wymaga tylko SHOPIFY_STOREFRONT_TOKEN jako secret
  */
 
-import { adminGraphql, type ShopifyEnv } from './utils/shopify-graphql';
 import { type McpRequest, type McpResponse } from './utils/jsonrpc';
 
-export interface Env extends ShopifyEnv {
+export interface Env {
   SHOP_DOMAIN?: string;
-  SHOPIFY_STOREFRONT_TOKEN?: string;
-  SHOPIFY_ADMIN_TOKEN?: string;
+}
+
+const MCP_TIMEOUT_MS = 5000;
+
+const CATALOG_FALLBACK = {
+  products: [],
+  system_note: 'Sklep jest chwilowo niedostępny (Connection Timeout). Poinformuj klienta o problemie technicznym.'
+};
+
+function safeArgsSummary(args: any) {
+  if (!args || typeof args !== 'object') return {};
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string') summary[key] = `[len:${value.length}]`;
+    else if (Array.isArray(value)) summary[key] = `array(len=${value.length})`;
+    else if (value && typeof value === 'object') summary[key] = 'object';
+    else summary[key] = value;
+  }
+  return summary;
+}
+
+function normalizeSearchArgs(raw: any) {
+  const args = { ...raw };
+  args.first = typeof args.first === 'number' ? args.first : 5;
+  args.context = typeof args.context === 'string' && args.context.trim().length > 0 ? args.context : 'biżuteria';
+  return args;
 }
 
 /**
@@ -26,59 +49,66 @@ export async function callShopifyMcpTool(
   toolName: string,
   args: Record<string, any>,
   env: Env
-): Promise<string> {
+): Promise<any> {
   const shopDomain = env.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
-  
   if (!shopDomain) {
     throw new Error('SHOP_DOMAIN not configured in wrangler.toml [vars]');
   }
 
-  const mcpEndpoint = `https://${shopDomain}/api/mcp`;
-  
+  const normalizedArgs = toolName === 'search_shop_catalog' ? normalizeSearchArgs(args) : args ?? {};
+  const mcpEndpoint = `https://${String(shopDomain).replace(/\/$/, '')}/api/mcp`;
+
   const request: McpRequest = {
     jsonrpc: '2.0',
     method: 'tools/call',
     params: {
       name: toolName,
-      arguments: args
+      arguments: normalizedArgs
     },
     id: Date.now()
   };
 
-  console.log(`[Shopify MCP] Calling ${toolName} at ${mcpEndpoint}`, args);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
 
-  const response = await fetch(mcpEndpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-      // NO TOKEN REQUIRED for Storefront MCP!
-    },
-    body: JSON.stringify(request)
-  });
+  try {
+    const response = await fetch(mcpEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal
+    });
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>');
-    throw new Error(`Shopify MCP HTTP ${response.status}: ${text}`);
-  }
+    console.log('[Shopify MCP] call', { tool: toolName, status: response.status, args: safeArgsSummary(normalizedArgs) });
 
-  const mcpResponse: McpResponse = await response.json();
-
-  if (mcpResponse.error) {
-    throw new Error(
-      `Shopify MCP error ${mcpResponse.error.code}: ${mcpResponse.error.message}`
-    );
-  }
-
-  // Standardowy format wyniku MCP
-  if (mcpResponse.result?.content && Array.isArray(mcpResponse.result.content)) {
-    const textContent = mcpResponse.result.content.find((c: any) => c.type === 'text');
-    if (textContent?.text) {
-      return String(textContent.text);
+    if (!response.ok) {
+      if (toolName === 'search_shop_catalog' && response.status === 522) {
+        return CATALOG_FALLBACK;
+      }
+      const text = await response.text().catch(() => '<no body>');
+      throw new Error(`Shopify MCP HTTP ${response.status}: ${text}`);
     }
-  }
 
-  // Fallback: zwróć raw result jako JSON string
-  return JSON.stringify(mcpResponse.result || {});
+    const mcpResponse: McpResponse | null = await response.json().catch(() => null);
+    if (!mcpResponse) {
+      throw new Error('Shopify MCP returned invalid JSON');
+    }
+    if (mcpResponse.error) {
+      throw new Error(`Shopify MCP error ${mcpResponse.error.code}: ${mcpResponse.error.message}`);
+    }
+    return (mcpResponse as any).result ?? mcpResponse;
+  } catch (err: any) {
+    const isAbortError = err instanceof Error && err.name === 'AbortError';
+    const isNetworkError = err instanceof TypeError;
+    if (toolName === 'search_shop_catalog' && (isAbortError || isNetworkError)) {
+      return CATALOG_FALLBACK;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /**
@@ -114,78 +144,8 @@ export async function updateCart(
   cartId: string | null,
   lines: Array<{ merchandiseId: string; quantity: number }>
 ): Promise<string> {
-  try {
-    // Próba przez MCP
-    return await callShopifyMcpTool('update_cart', { cart_id: cartId, lines }, env);
-  } catch (mcpError) {
-    console.warn('[MCP Fallback] update_cart failed, trying GraphQL Admin API', mcpError);
-    
-    // Fallback: GraphQL Storefront API (cartCreate lub cartLinesUpdate)
-    if (!cartId) {
-      // Tworzenie nowego koszyka
-      const mutation = `
-        mutation cartCreate($input: CartInput!) {
-          cartCreate(input: $input) {
-            cart {
-              id
-              lines(first: 10) {
-                edges {
-                  node {
-                    id
-                    quantity
-                    merchandise { ... on ProductVariant { id title price { amount } } }
-                  }
-                }
-              }
-              cost { totalAmount { amount currencyCode } }
-            }
-            userErrors { field message }
-          }
-        }
-      `;
-      const data = await adminGraphql<{ cartCreate: any }>(env, mutation, {
-        input: { lines: lines.map(l => ({ merchandiseId: l.merchandiseId, quantity: l.quantity })) }
-      });
-      
-      if (data.cartCreate.userErrors?.length) {
-        throw new Error(`Cart create errors: ${JSON.stringify(data.cartCreate.userErrors)}`);
-      }
-      
-      return JSON.stringify(data.cartCreate.cart);
-    } else {
-      // Aktualizacja istniejącego koszyka
-      const mutation = `
-        mutation cartLinesUpdate($cartId: ID!, $lines: [CartLineUpdateInput!]!) {
-          cartLinesUpdate(cartId: $cartId, lines: $lines) {
-            cart {
-              id
-              lines(first: 10) {
-                edges {
-                  node {
-                    id
-                    quantity
-                    merchandise { ... on ProductVariant { id title price { amount } } }
-                  }
-                }
-              }
-              cost { totalAmount { amount currencyCode } }
-            }
-            userErrors { field message }
-          }
-        }
-      `;
-      const data = await adminGraphql<{ cartLinesUpdate: any }>(env, mutation, {
-        cartId,
-        lines: lines.map(l => ({ id: l.merchandiseId, quantity: l.quantity }))
-      });
-      
-      if (data.cartLinesUpdate.userErrors?.length) {
-        throw new Error(`Cart update errors: ${JSON.stringify(data.cartLinesUpdate.userErrors)}`);
-      }
-      
-      return JSON.stringify(data.cartLinesUpdate.cart);
-    }
-  }
+  const result = await callShopifyMcpTool('update_cart', { cart_id: cartId, lines }, env);
+  return JSON.stringify(result ?? {});
 }
 
 /**
@@ -198,51 +158,8 @@ export async function getCart(
   env: Env,
   cartId: string
 ): Promise<string> {
-  try {
-    // Próba przez MCP
-    return await callShopifyMcpTool('get_cart', { cart_id: cartId }, env);
-  } catch (mcpError) {
-    console.warn('[MCP Fallback] get_cart failed, trying GraphQL Admin API', mcpError);
-    
-    // Fallback: GraphQL Storefront API cart query
-    const query = `
-      query cart($id: ID!) {
-        cart(id: $id) {
-          id
-          lines(first: 50) {
-            edges {
-              node {
-                id
-                quantity
-                merchandise {
-                  ... on ProductVariant {
-                    id
-                    title
-                    price { amount currencyCode }
-                    product { title handle }
-                  }
-                }
-              }
-            }
-          }
-          cost {
-            totalAmount { amount currencyCode }
-            subtotalAmount { amount currencyCode }
-            totalTaxAmount { amount currencyCode }
-          }
-          checkoutUrl
-        }
-      }
-    `;
-    
-    const data = await adminGraphql<{ cart: any }>(env, query, { id: cartId });
-    
-    if (!data.cart) {
-      throw new Error(`Cart not found: ${cartId}`);
-    }
-    
-    return JSON.stringify(data.cart);
-  }
+  const result = await callShopifyMcpTool('get_cart', { cart_id: cartId }, env);
+  return JSON.stringify(result ?? {});
 }
 
 /**
@@ -255,50 +172,8 @@ export async function getOrderStatus(
   env: Env,
   orderId: string
 ): Promise<string> {
-  try {
-    // Próba przez MCP
-    return await callShopifyMcpTool('get_order_status', { order_id: orderId }, env);
-  } catch (mcpError) {
-    console.warn('[MCP Fallback] get_order_status failed, trying GraphQL Admin API', mcpError);
-    
-    // Fallback: GraphQL Admin API order query
-    const query = `
-      query order($id: ID!) {
-        order(id: $id) {
-          id
-          name
-          createdAt
-          displayFinancialStatus
-          displayFulfillmentStatus
-          totalPriceSet { shopMoney { amount currencyCode } }
-          lineItems(first: 10) {
-            edges {
-              node {
-                id
-                title
-                quantity
-                variant { id title }
-              }
-            }
-          }
-          shippingAddress {
-            address1
-            city
-            country
-            zip
-          }
-        }
-      }
-    `;
-    
-    const data = await adminGraphql<{ order: any }>(env, query, { id: orderId });
-    
-    if (!data.order) {
-      throw new Error(`Order not found: ${orderId}`);
-    }
-    
-    return JSON.stringify(data.order);
-  }
+  const result = await callShopifyMcpTool('get_order_status', { order_id: orderId }, env);
+  return JSON.stringify(result ?? {});
 }
 
 /**
@@ -309,48 +184,8 @@ export async function getOrderStatus(
 export async function getMostRecentOrderStatus(
   env: Env
 ): Promise<string> {
-  try {
-    // Próba przez MCP
-    return await callShopifyMcpTool('get_most_recent_order_status', {}, env);
-  } catch (mcpError) {
-    console.warn('[MCP Fallback] get_most_recent_order_status failed, trying GraphQL Admin API', mcpError);
-    
-    // Fallback: GraphQL Admin API orders query (most recent)
-    const query = `
-      query orders {
-        orders(first: 1, reverse: true, sortKey: CREATED_AT) {
-          edges {
-            node {
-              id
-              name
-              createdAt
-              displayFinancialStatus
-              displayFulfillmentStatus
-              totalPriceSet { shopMoney { amount currencyCode } }
-              lineItems(first: 10) {
-                edges {
-                  node {
-                    id
-                    title
-                    quantity
-                    variant { id title }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `;
-    
-    const data = await adminGraphql<{ orders: { edges: Array<{ node: any }> } }>(env, query);
-    
-    if (!data.orders?.edges?.length) {
-      throw new Error('No orders found');
-    }
-    
-    return JSON.stringify(data.orders.edges[0].node);
-  }
+  const result = await callShopifyMcpTool('get_most_recent_order_status', {}, env);
+  return JSON.stringify(result ?? {});
 }
 
 /**

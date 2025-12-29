@@ -121,6 +121,10 @@ export const TOOL_SCHEMAS = {
           type: 'string',
           description: 'Search query (keywords, product name, category, etc.)'
         },
+        context: {
+          type: 'string',
+          description: 'Domain context for disambiguation (e.g., "biżuteria" or intent from the conversation)'
+        },
         first: {
           type: 'number',
           description: 'Number of results to return (default: 5, max: 20)',
@@ -129,7 +133,7 @@ export const TOOL_SCHEMAS = {
           maximum: 20
         }
       },
-      required: ['query']
+      required: ['query', 'context']
     }
   },
 

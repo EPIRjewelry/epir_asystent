@@ -1,10 +1,12 @@
 ﻿import type { Env } from './index';
+import { callShopifyMcpTool } from './shopify-mcp-client';
 
-// --- Typy dla parametr├│w i wynik├│w narz─Ödzi ---
+// --- Typy dla parametrów i wyników narzędzi ---
 
 interface SearchProductParams {
   query: string;
   first?: number;
+  context?: string;
 }
 
 interface PolicyParams {
@@ -14,10 +16,10 @@ interface PolicyParams {
 interface ProductResult {
   id: string;
   title: string;
-  description: string;
-  price: string;
-  currency: string;
-  url: string;
+  description?: string;
+  price?: string;
+  currency?: string;
+  url?: string;
 }
 
 interface PolicyResult {
@@ -32,73 +34,16 @@ interface PolicyResult {
  * @param params Parametry wyszukiwania, głównie `query`.
  * @param env Zmienne srodowiskowe.
  * @returns Structured JSON z wynikami.
+/**
+ * Narzędzie MCP: Wyszukuje produkty w katalogu Shopify przez oficjalny endpoint MCP sklepu.
+ * @param params Parametry wyszukiwania, głównie `query`.
+ * @param env Zmienne środowiskowe.
+ * @returns Structured JSON z wynikami.
  */
-export async function searchProductCatalog(params: SearchProductParams, env: Env): Promise<{ products: ProductResult[] }> {
-  const { query, first = 5 } = params;
-  const shopDomain = env.SHOP_DOMAIN || process.env.SHOP_DOMAIN || 'test-shop.myshopify.com';
-  const storefrontToken = env.SHOPIFY_STOREFRONT_TOKEN || process.env.SHOPIFY_STOREFRONT_TOKEN || 'mock-token';
-  const storefrontUrl = `https://${shopDomain}/api/2025-10/graphql.json`;
-  
-  console.log('[searchProductCatalog] Shop:', shopDomain);
-  console.log('[searchProductCatalog] Token exists:', !!storefrontToken);
-  console.log('[searchProductCatalog] Token prefix:', storefrontToken?.substring(0, 10));
-
-  const graphqlQuery = {
-    query: `
-      query searchProducts($query: String!, $first: Int!) {
-        products(query: $query, first: $first) {
-          edges {
-            node {
-              id
-              title
-              descriptionHtml
-              onlineStoreUrl
-              priceRange {
-                minVariantPrice {
-                  amount
-                  currencyCode
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    variables: { query, first },
-  };
-
-  const response = await fetch(storefrontUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Storefront-Access-Token': storefrontToken,
-    },
-    body: JSON.stringify(graphqlQuery),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Shopify Storefront API error:', errorText);
-    throw new Error(`Shopify Storefront API error: ${response.status}`);
+  if (result && typeof result === 'object' && 'products' in (result as any)) {
+    return result as any;
   }
-
-  const json: any = await response.json();
-  const products = json.data?.products?.edges;
-
-  if (!products || products.length === 0) {
-    return { products: [] };
-  }
-
-  return {
-    products: products.map((edge: any) => ({
-      id: edge.node.id,
-      title: edge.node.title,
-      description: edge.node.descriptionHtml.replace(/<[^>]*>/g, '').substring(0, 200),
-      price: edge.node.priceRange.minVariantPrice.amount,
-      currency: edge.node.priceRange.minVariantPrice.currencyCode,
-      url: edge.node.onlineStoreUrl
-    }))
-  };
+  return { products: [] };
 }
 
 /**
@@ -108,51 +53,15 @@ export async function searchProductCatalog(params: SearchProductParams, env: Env
  * @returns Structured JSON z tre┼Ťci─ů polityk.
  */
 export async function getShopPolicies(params: PolicyParams, env: Env): Promise<{ policies: PolicyResult[] }> {
-  const shopDomain = env.SHOP_DOMAIN || process.env.SHOP_DOMAIN || 'test-shop.myshopify.com';
-  const adminToken = env.SHOPIFY_ADMIN_TOKEN || process.env.SHOPIFY_ADMIN_TOKEN || process.env.SHOPIFY_ACCESS_TOKEN || 'mock-token';
-  const adminUrl = `https://${shopDomain}/admin/api/2025-10/graphql.json`;
-  const policyFields = params.policy_types.join('\n');
-
-  const graphqlQuery = {
-    query: `
-      query getShopPolicies {
-        shop {
-          ${policyFields} {
-            body
-          }
-        }
-      }
-    `,
-  };
-
-  const response = await fetch(adminUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': adminToken,
-    },
-    body: JSON.stringify(graphqlQuery),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Shopify Admin API error:', errorText);
-    throw new Error(`Shopify Admin API error: ${response.status}`);
+  try {
+    const result = await callShopifyMcpTool('get_shop_policies', { policy_types: params.policy_types }, env as any);
+    if (result && typeof result === 'object' && 'policies' in (result as any)) {
+      return result as any;
+    }
+  } catch (e) {
+    console.warn('getShopPolicies via MCP failed:', e);
   }
-
-  const json: any = await response.json();
-  const policies = json.data?.shop;
-
-  if (!policies) {
-    return { policies: [] };
-  }
-
-  return {
-    policies: Object.entries(policies).map(([key, value]: [string, any]) => ({
-      type: key,
-      body: value.body
-    }))
-  };
+  return { policies: [] };
 }
 
 /**
