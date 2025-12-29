@@ -142,19 +142,26 @@ CREATE INDEX IF NOT EXISTS idx_pixel_collection
 -- ============================================================================
 -- Migration Notes
 -- ============================================================================
--- This schema now includes ALL fields inline (base + heatmap v3).
--- The separate schema-pixel-events-v3-heatmap.sql file is now DEPRECATED
--- because all columns are defined in this base schema.
+-- ⚠️ UNIFIED SCHEMA (v3) - Single-File Approach
+-- This schema includes ALL fields inline (base + heatmap v3) in ONE file.
+-- The separate schema-pixel-events-v3-heatmap.sql file is DEPRECATED.
 --
--- 1. Run locally first for testing:
+-- IMPORTANT: Use ONLY this file for new databases. Do NOT use the v3-heatmap file.
+--
+-- Migration Steps:
+--
+-- 1. Test locally first:
 --    wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-base.sql
 --
--- 2. Run in production after testing:
---    wrangler d1 execute epir_art_jewellery --remote --file=./schema-pixel-events-base.sql
---
--- 3. Verify table schema:
+-- 2. Verify table was created correctly:
 --    wrangler d1 execute epir_art_jewellery --local --command="PRAGMA table_info(pixel_events);"
 --
--- 4. Test event insertion:
+-- 3. Test event insertion:
 --    wrangler d1 execute epir_art_jewellery --local --command="INSERT INTO pixel_events (event_type, created_at) VALUES ('test', 1234567890); SELECT * FROM pixel_events WHERE event_type='test';"
+--
+-- 4. Deploy to production after testing:
+--    wrangler d1 execute epir_art_jewellery --remote --file=./schema-pixel-events-base.sql
+--
+-- 5. Run schema verification (optional):
+--    ./verify-schema-consistency.sh
 -- ============================================================================
