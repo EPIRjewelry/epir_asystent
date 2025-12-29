@@ -493,7 +493,6 @@ async function streamAssistantResponse(
   (async () => {
     const writer = writable.getWriter();
     let history: HistoryEntry[] = [];
-    let accumulatedResponse = '';
 
     async function sendSSE(event: string, data: object | string) {
         const payload = typeof data === 'string' ? data : JSON.stringify(data);
