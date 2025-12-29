@@ -1,14 +1,34 @@
 -- ============================================================================
 -- pixel_events Schema Extension for Full Spectrum Tracking
 -- ============================================================================
--- Purpose: Add columns for heatmap data (click coordinates, scroll depth, time on page)
--- Migration: Run AFTER initial pixel_events table exists
--- Command: wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-v3-heatmap.sql
+-- ⚠️ DEPRECATED: This file is no longer needed as all columns are now
+--    defined in schema-pixel-events-base.sql
+--
+-- Purpose: This file previously added heatmap columns via ALTER TABLE.
+--          All columns are now included in the base schema for consistency.
+--
+-- Migration: Use schema-pixel-events-base.sql instead, which includes all fields.
 -- ============================================================================
 
--- Add heatmap-specific columns (idempotent - will fail silently if columns exist)
+-- ⚠️ DO NOT USE THIS FILE FOR NEW DATABASES
+-- If you previously used this file, the columns should already exist in your database.
+-- For new databases, use schema-pixel-events-base.sql which includes everything.
 
--- Click tracking (from epir:click_with_position)
+-- ============================================================================
+-- LEGACY ALTER TABLE STATEMENTS (kept for reference only)
+-- ============================================================================
+-- These ALTER TABLE statements are kept for historical reference.
+-- They are no longer needed because schema-pixel-events-base.sql now includes
+-- all these columns in the CREATE TABLE statement.
+
+-- ============================================================================
+-- LEGACY ALTER TABLE STATEMENTS (kept for reference only)
+-- ============================================================================
+-- These ALTER TABLE statements are kept for historical reference.
+-- They are no longer needed because schema-pixel-events-base.sql now includes
+-- all these columns in the CREATE TABLE statement.
+
+-- Click tracking (from epir:click_with_position) - NOW IN BASE SCHEMA
 ALTER TABLE pixel_events ADD COLUMN click_x INTEGER DEFAULT NULL;
 ALTER TABLE pixel_events ADD COLUMN click_y INTEGER DEFAULT NULL;
 ALTER TABLE pixel_events ADD COLUMN viewport_w INTEGER DEFAULT NULL;
@@ -54,8 +74,10 @@ ALTER TABLE pixel_events ADD COLUMN mouse_x INTEGER DEFAULT NULL;
 ALTER TABLE pixel_events ADD COLUMN mouse_y INTEGER DEFAULT NULL;
 
 -- ============================================================================
--- Indexes for heatmap analysis
+-- LEGACY INDEXES (kept for reference only)
 -- ============================================================================
+-- These indexes are now created in schema-pixel-events-base.sql
+-- This section is kept for historical reference only.
 
 -- Click heatmaps by page
 CREATE INDEX IF NOT EXISTS idx_pixel_clicks 
@@ -83,8 +105,11 @@ CREATE INDEX IF NOT EXISTS idx_pixel_collection
     WHERE collection_id IS NOT NULL;
 
 -- ============================================================================
--- Verification queries
+-- LEGACY VERIFICATION QUERIES (kept for reference only)
 -- ============================================================================
+-- For current verification queries, see schema-pixel-events-base.sql
+-- These are kept for historical reference only.
+--
 -- After migration, run these to verify:
 --
 -- 1. Check schema:
