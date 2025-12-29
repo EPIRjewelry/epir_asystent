@@ -122,7 +122,14 @@ describe('Tool calls message structure (native)', () => {
     expect(currentMessages).toHaveLength(6);
     currentMessages.forEach((msg, idx) => {
       expect(msg, `Message ${idx} should have role`).toHaveProperty('role');
-      expect(msg, `Message ${idx} should have content`).toHaveProperty('content');
+
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        // Tool-calling assistant messages should have content explicitly set to null
+        expect(msg.content, `Message ${idx} (assistant with tool_calls) should have null content`).toBeNull();
+      } else {
+        // Other messages should have a content property
+        expect(msg, `Message ${idx} should have content`).toHaveProperty('content');
+      }
     });
 
     const payload = JSON.stringify({ messages: currentMessages });
