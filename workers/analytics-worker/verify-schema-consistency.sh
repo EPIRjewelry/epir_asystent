@@ -99,11 +99,15 @@ done
 echo ""
 echo "🔍 Checking v3-heatmap deprecation..."
 
-# Check that v3-heatmap file has deprecation notice
-if grep -q "DEPRECATED" schema-pixel-events-v3-heatmap.sql; then
-    echo -e "${GREEN}✓${NC} v3-heatmap file is marked as DEPRECATED"
+# Check that v3-heatmap file has deprecation notice (optional check)
+if [ -f "schema-pixel-events-v3-heatmap.sql" ]; then
+    if grep -q "DEPRECATED" schema-pixel-events-v3-heatmap.sql; then
+        echo -e "${GREEN}✓${NC} v3-heatmap file is marked as DEPRECATED"
+    else
+        echo -e "${YELLOW}⚠${NC}  v3-heatmap file should be marked as DEPRECATED"
+    fi
 else
-    echo -e "${YELLOW}⚠${NC}  v3-heatmap file should be marked as DEPRECATED"
+    echo -e "${YELLOW}⚠${NC}  v3-heatmap file not found (this is OK if fully migrated)"
 fi
 
 echo ""

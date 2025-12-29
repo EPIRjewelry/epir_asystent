@@ -21,13 +21,6 @@
 -- They are no longer needed because schema-pixel-events-base.sql now includes
 -- all these columns in the CREATE TABLE statement.
 
--- ============================================================================
--- LEGACY ALTER TABLE STATEMENTS (kept for reference only)
--- ============================================================================
--- These ALTER TABLE statements are kept for historical reference.
--- They are no longer needed because schema-pixel-events-base.sql now includes
--- all these columns in the CREATE TABLE statement.
-
 -- Click tracking (from epir:click_with_position) - NOW IN BASE SCHEMA
 ALTER TABLE pixel_events ADD COLUMN click_x INTEGER DEFAULT NULL;
 ALTER TABLE pixel_events ADD COLUMN click_y INTEGER DEFAULT NULL;
