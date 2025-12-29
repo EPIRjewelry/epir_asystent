@@ -13,8 +13,28 @@
 import { callMcpToolDirect } from './mcp_server';
 import { isString, isRecord, safeJsonParse, asStringField } from './utils/json';
 
-// Kanoniczny, hardcoded endpoint MCP sklepu (wymagane):
-const CANONICAL_MCP_URL = 'https://epir-art-silver-jewellery.myshopify.com/api/mcp';
+const MCP_TIMEOUT_MS = 5000;
+const CATALOG_FALLBACK = {
+  products: [],
+  system_note: 'Sklep jest chwilowo niedostępny (Connection Timeout). Poinformuj klienta o problemie technicznym.'
+};
+
+function mcpEndpointForShop(shopDomain?: string) {
+  if (!shopDomain) return '';
+  return `https://${String(shopDomain).replace(/\/$/, '')}/api/mcp`;
+}
+
+function safeArgsSummary(args: any) {
+  if (!args || typeof args !== 'object') return {};
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string') summary[key] = `[len:${value.length}]`;
+    else if (Array.isArray(value)) summary[key] = `array(len=${value.length})`;
+    else if (value && typeof value === 'object') summary[key] = 'object';
+    else summary[key] = value;
+  }
+  return summary;
+}
 
 export type VectorizeIndex = {
   // Abstrakcja: implementacja zależy od bindingu Vectorize w Cloudflare (typu API).
@@ -277,7 +297,6 @@ async function callMcpToolWithFallback(toolName: string, args: any, env: any): P
 /**
  * searchProductCatalogWithMCP
  * - używa MCP jako PRIMARY source dla katalogu produktów
- * - Vectorize jako fallback offline/błąd MCP
  */
 export async function searchProductCatalogWithMCP(
   query: string,
@@ -289,47 +308,53 @@ export async function searchProductCatalogWithMCP(
     if (query === 'error') return { error: 'Tool search_shop_catalog failed: Mocked MCP error' };
     return { result: `Products for query: ${query}` };
   }
-  if (!shopDomain) return '';
+  if (!shopDomain || typeof shopDomain !== 'string') return JSON.stringify(CATALOG_FALLBACK);
+
+  const endpoint = mcpEndpointForShop(shopDomain);
+  if (!endpoint) return JSON.stringify(CATALOG_FALLBACK);
+
+  const contextValue = context && context.trim().length ? context.trim() : 'biżuteria';
+  const payload = {
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: {
+      name: 'search_shop_catalog',
+      arguments: { query, context: contextValue }
+    },
+    id: Date.now()
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
+
   try {
-  // MCP endpoint: use the store's canonical, hardcoded MCP endpoint
-  const mcpEndpoint = CANONICAL_MCP_URL;
-    // Ensure context is always a string (never undefined)
-    const contextValue = context || 'biżuteria';
-    console.log('[searchProductCatalogWithMCP] 📦 DEBUG:', { query, context, contextValue });
-    const payload = {
-      jsonrpc: '2.0',
-      method: 'tools/call',
-      params: {
-        name: 'search_shop_catalog',
-        arguments: { query, context: contextValue }
-      },
-      id: Date.now()
-    };
-    console.log('[searchProductCatalogWithMCP] 📤 Sending payload:', JSON.stringify(payload));
-    const res = await fetch(mcpEndpoint, {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: controller.signal
     });
+
+    console.log('[mcp] call', { tool: 'search_shop_catalog', status: res.status, args: safeArgsSummary(payload.params?.arguments) });
+
     if (!res.ok) {
+      if (res.status === 522) return JSON.stringify(CATALOG_FALLBACK);
       const txt = await res.text().catch(() => '<no body>');
       throw new Error(`MCP search_shop_catalog error ${res.status}: ${txt}`);
     }
+
     let j: unknown = await res.json().catch(() => null);
     if (isString(j)) {
       const parsed = safeJsonParse(j);
       if (parsed) j = parsed as unknown;
     }
-    console.log('[MCP DEBUG] Odpowiedź search_shop_catalog:', JSON.stringify(j));
+
     if (isRecord(j) && 'error' in j && j.error) {
       const errStr = JSON.stringify((j as Record<string, unknown>).error);
       throw new Error(`MCP tool call failed: ${errStr}`);
     }
-    // Standard MCP result: j.result.content[0].text
+
     if (isRecord(j) && 'result' in j && isRecord(j.result) && Array.isArray((j.result as McpResult).content)) {
-      if ((j.result as McpResult).content!.length === 0) {
-        return '';
-      }
       const textContent = (j.result as McpResult).content!.find((c: McpContentItem) => c.type === 'text');
       if (textContent?.text) {
         const maybeParsed = safeJsonParse(textContent.text);
@@ -339,11 +364,16 @@ export async function searchProductCatalogWithMCP(
       }
       return '';
     }
-    // Fallback: zwróć raw result jako JSON string
-    return '';
-  } catch (e) {
+
+    return JSON.stringify(j ?? {});
+  } catch (e: any) {
+    const isAbortError = e instanceof Error && e.name === 'AbortError';
+    const isNetworkError = e instanceof TypeError;
+    if (isAbortError || isNetworkError) return JSON.stringify(CATALOG_FALLBACK);
     console.error('[RAG] ❌ searchProductCatalogWithMCP MCP failure:', e);
-    return '';
+    return JSON.stringify(CATALOG_FALLBACK);
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

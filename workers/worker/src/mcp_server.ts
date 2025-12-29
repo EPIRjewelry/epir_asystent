@@ -1,21 +1,21 @@
 // MCP Server (JSON-RPC 2.0) dla narzędzi Shopify w trybie single-store.
-// Sekrety (SHOPIFY_APP_SECRET, SHOPIFY_ADMIN_TOKEN) pochodzą TYLKO z Cloudflare Secrets.
+// Architektura: Wszystkie narzędzia delegują do oficjalnego endpoint MCP sklepu:
+//   https://{shop_domain}/api/mcp
+// Bez fallbacków na Storefront/Admin API – tzn. bez zależności od tokenów Storefront.
+// 
+// Strategia błędów (Plan B):
+// - Timeout/522/503/AbortError dla search_shop_catalog → fallback: puste produkty + system_note
+// - Timeout/AbortError dla innych narzędzi → błąd JSON-RPC (nie fallback)
+// - Dzięki temu AI dostaje "sklep niedostępny" zamiast crashu z 401.
+//
+// Sekrety (SHOPIFY_APP_SECRET) pochodzą TYLKO z Cloudflare Secrets.
 // ŻADNYCH sekretów w wrangler.toml [vars] ani w kodzie.
 // Endpointy:
 // - POST /mcp/tools/call (dev/test bez HMAC)
 // - POST /apps/assistant/mcp (App Proxy + HMAC)
-// Narzędzia: get_product, search_shop_catalog (Shopify Admin GraphQL 2024-07)
 
 import { verifyAppProxyHmac } from './auth';
 import { checkRateLimit } from './rate-limiter';
-import { searchProductCatalog, getShopPolicies } from './mcp';
-import {
-  updateCart,
-  getCart,
-  getOrderStatus,
-  getMostRecentOrderStatus
-} from './shopify-mcp-client';
-import { adminGraphql } from './utils/shopify-graphql';
 import { 
   type JsonRpcRequest, 
   type JsonRpcResponse,
@@ -40,36 +40,104 @@ function rpcError(id: JsonRpcId, code: number, message: string, data?: any): Res
   return new Response(JSON.stringify(body), { status: 200, headers: json() });
 }
 
-async function toolGetProduct(env: Env, args: any) {
-  const id = String(args?.id || '').trim();
-  if (!id) throw new Error('get_product: Missing "id"');
-  const data = await adminGraphql<{ product: any }>(
-    env,
-    `query Product($id: ID!) {
-      product(id: $id) {
-        id title handle descriptionHtml onlineStoreUrl vendor tags
-        variants(first: 10) { edges { node { id title price } } }
-        featuredImage { url altText }
-      }
-    }`,
-    { id }
-  );
-  return data.product;
+const MCP_TIMEOUT_MS = 5000;
+
+const CATALOG_FALLBACK = {
+  products: [],
+  system_note: 'Sklep jest chwilowo niedostępny (Connection Timeout). Poinformuj klienta o problemie technicznym.'
+};
+
+function safeArgsSummary(args: any) {
+  if (!args || typeof args !== 'object') return {};
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string') {
+      summary[key] = `[len:${value.length}]`;
+    } else if (Array.isArray(value)) {
+      summary[key] = `array(len=${value.length})`;
+    } else if (value && typeof value === 'object') {
+      summary[key] = 'object';
+    } else {
+      summary[key] = value;
+    }
+  }
+  return summary;
 }
 
-async function toolSearchProducts(env: Env, args: any) {
-  const query = String(args?.query || '').trim();
-  if (!query) throw new Error('search_shop_catalog: Missing "query"');
-  const data = await adminGraphql<{ products: { edges: { node: any }[] } }>(
-    env,
-    `query Search($query: String!) {
-      products(first: 10, query: $query) {
-        edges { node { id title handle vendor onlineStoreUrl featuredImage { url altText } } }
+function normalizeSearchArgs(raw: any) {
+  const args = { ...raw };
+  args.first = typeof args.first === 'number' ? args.first : 5;
+  args.context = typeof args.context === 'string' && args.context.trim().length > 0 ? args.context : 'biżuteria';
+  return args;
+}
+
+async function callShopMcp(env: Env, toolName: string, rawArgs: any): Promise<{ result?: any; error?: any }> {
+  const shopDomain = env?.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
+  if (!shopDomain) {
+    return { error: { code: -32602, message: 'SHOP_DOMAIN not configured' } };
+  }
+
+  const args = toolName === 'search_shop_catalog' ? normalizeSearchArgs(rawArgs) : rawArgs ?? {};
+
+  const rpc: JsonRpcRequest = {
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: { name: toolName, arguments: args },
+    id: Date.now()
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
+  const endpoint = `https://${String(shopDomain).replace(/\/$/, '')}/api/mcp`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rpc),
+      signal: controller.signal
+    });
+
+    console.log('[mcp] call', { tool: toolName, status: res.status, args: safeArgsSummary(args), timestamp: new Date().toISOString() });
+
+    if (!res.ok) {
+      // Plan B: Safe fallback for search_shop_catalog on network/service errors
+      if (toolName === 'search_shop_catalog' && (res.status === 522 || res.status === 503 || res.status >= 500)) {
+        console.warn(`[mcp] Shop MCP ${res.status} for ${toolName}, returning safe fallback`);
+        return { result: CATALOG_FALLBACK };
       }
-    }`,
-    { query }
-  );
-  return data.products?.edges?.map(e => e.node) ?? [];
+      const body = await res.text().catch(() => '');
+      return { error: { code: res.status, message: `Shop MCP HTTP ${res.status}`, details: body.slice(0, 500) } };
+    }
+
+    const json = (await res.json().catch(() => null)) as JsonRpcResponse | null;
+    if (!json) {
+      if (toolName === 'search_shop_catalog') {
+        console.warn('[mcp] Invalid JSON from shop MCP for search_shop_catalog, returning safe fallback');
+        return { result: CATALOG_FALLBACK };
+      }
+      return { error: { code: -32700, message: 'Invalid JSON response from shop MCP' } };
+    }
+    if ((json as any).error) {
+      return { error: (json as any).error };
+    }
+    return { result: (json as any).result ?? json };
+  } catch (err: any) {
+    const isAbortError = err instanceof Error && err.name === 'AbortError';
+    const isNetworkError = err instanceof TypeError;
+    const errMsg = err?.message || String(err);
+    
+    // Plan B: Safe fallback for search_shop_catalog on timeout/network errors
+    if (toolName === 'search_shop_catalog' && (isAbortError || isNetworkError)) {
+      console.warn(`[mcp] Timeout/Network error for ${toolName}, returning safe fallback`, { error: errMsg });
+      return { result: CATALOG_FALLBACK };
+    }
+    
+    console.error('[mcp] Shop MCP call failed', { tool: toolName, error: errMsg });
+    return { error: { code: -32000, message: 'Shop MCP call failed', details: errMsg } };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function handleToolsCall(env: any, request: Request): Promise<Response> {
@@ -84,17 +152,20 @@ export async function handleToolsCall(env: any, request: Request): Promise<Respo
     return rpcError(rpc?.id ?? null, -32600, 'Invalid Request');
   }
 
-    if (rpc.method === 'tools/list') {
+  if (rpc.method === 'tools/list') {
     const tools = [
       {
         name: 'search_shop_catalog',
         description: 'Search Shopify product catalog',
-        inputSchema: { type: 'object', properties: { query: { type: 'string' }, first: { type: 'number', default: 5 } } }
-      },
-      {
-        name: 'search_shop_policies_and_faqs',
-        description: 'Search shop policies and FAQs',
-        inputSchema: { type: 'object', properties: { query: { type: 'string' }, context: { type: 'string' } } }
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            context: { type: 'string', description: 'Domain context (e.g., biżuteria or conversation intent)' },
+            first: { type: 'number', default: 5 }
+          },
+          required: ['query', 'context']
+        }
       },
       {
         name: 'update_cart',
@@ -159,217 +230,26 @@ export async function handleToolsCall(env: any, request: Request): Promise<Respo
     return rpcError(rpc.id ?? null, -32602, 'Invalid params: "name" required');
   }
 
-  try {
-    switch (name) {
-      case 'search_shop_catalog': {
-        if (!args.query) {
-          return rpcError(rpc.id ?? null, -32602, 'Invalid params: "query" required for search_shop_catalog');
-        }
-        const result = await searchProductCatalog({ query: args.query, first: args.first || 5 }, env);
-        return rpcResult(rpc.id ?? null, result);
-      }
-      case 'search_shop_policies_and_faqs': {
-        if (!args.query) {
-          return rpcError(rpc.id ?? null, -32602, 'Invalid params: "query" required for search_shop_policies_and_faqs');
-        }
-        const result = await getShopPolicies({ policy_types: ['termsOfService', 'shippingPolicy', 'refundPolicy', 'privacyPolicy', 'subscriptionPolicy'] }, env);
-        return rpcResult(rpc.id ?? null, result);
-      }
-      case 'update_cart': {
-        // Walidacja params
-        if (!args.lines || !Array.isArray(args.lines)) {
-          return rpcError(rpc.id ?? null, -32602, 'Invalid params: "lines" array required for update_cart');
-        }
-        // Sprawdź, czy każda linia ma wymagane pola
-        for (const line of args.lines) {
-          if (!line.merchandiseId || typeof line.quantity !== 'number') {
-            return rpcError(rpc.id ?? null, -32602, 'Invalid params: each line must have "merchandiseId" and "quantity"');
-          }
-        }
-        const result = await updateCart(env, args.cart_id || null, args.lines);
-        return rpcResult(rpc.id ?? null, { content: [{ type: 'text', text: result }] });
-      }
-      case 'get_cart': {
-        if (!args.cart_id) {
-          return rpcError(rpc.id ?? null, -32602, 'Invalid params: "cart_id" required for get_cart');
-        }
-        const result = await getCart(env, args.cart_id);
-        return rpcResult(rpc.id ?? null, { content: [{ type: 'text', text: result }] });
-      }
-      case 'get_order_status': {
-        if (!args.order_id) {
-          return rpcError(rpc.id ?? null, -32602, 'Invalid params: "order_id" required for get_order_status');
-        }
-        const result = await getOrderStatus(env, args.order_id);
-        return rpcResult(rpc.id ?? null, { content: [{ type: 'text', text: result }] });
-      }
-      case 'get_most_recent_order_status': {
-        const result = await getMostRecentOrderStatus(env);
-        return rpcResult(rpc.id ?? null, { content: [{ type: 'text', text: result }] });
-      }
-      default:
-        return rpcError(rpc.id ?? null, -32601, `Unknown tool: ${name}`);
-    }
-  } catch (err: any) {
-    console.error('MCP tool error:', err);
-    const message = err instanceof Error ? err.message : String(err);
-    return rpcError(rpc.id ?? null, -32000, 'Tool execution failed', { message });
+  if (name === 'search_shop_catalog' && !args.query) {
+    return rpcError(rpc.id ?? null, -32602, 'Invalid params: "query" required for search_shop_catalog');
   }
+
+  const { result, error } = await callShopMcp(env, name, args);
+
+  if (error) {
+    return rpcError(rpc.id ?? null, error.code ?? -32000, error.message ?? 'Tool execution failed', error.details ? { details: error.details } : undefined);
+  }
+
+  return rpcResult(rpc.id ?? null, result ?? {});
 }
 
 /**
  * Direct MCP tool call without HTTP - for internal calls
  */
 export async function callMcpToolDirect(env: any, toolName: string, args: any): Promise<any> {
-  const rpc: JsonRpcRequest = {
-    jsonrpc: '2.0',
-    method: 'tools/call',
-    params: { name: toolName, arguments: args },
-    id: Date.now()
-  };
-
-  const shopDomain = env?.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
-  const workerOrigin = env?.WORKER_ORIGIN;
-  const originHeader = env?.ALLOWED_ORIGIN || workerOrigin || 'https://asystent.epirbizuteria.pl';
-  const isSearchCatalogTool = toolName === 'search_shop_catalog';
-  const catalogFallbackResult = {
-    products: [],
-    system_note: 'Sklep jest chwilowo niedostępny (Connection Timeout). Poinformuj klienta o problemie technicznym.'
-  };
-
-  let lastError: Error | null = null;
-
-  // Ensure shop MCP is always prioritized
-  if (shopDomain) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    try {
-      const shopUrl = `https://${String(shopDomain).replace(/\/$/, '')}/api/mcp`;
-      console.log(`Attempting shop MCP connection for tool: ${toolName}`, {
-        shopUrl,
-        arguments: args,
-        timestamp: new Date().toISOString(),
-      });
-      const res = await fetch(shopUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: originHeader },
-        body: JSON.stringify(rpc),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        if (isSearchCatalogTool && res.status === 522) {
-          console.warn('Shop MCP returned 522 for search_shop_catalog; returning fallback response', {
-            toolName,
-            status: res.status,
-            statusText: res.statusText,
-            body: body.slice(0, 500),
-          });
-          return { result: catalogFallbackResult };
-        }
-        console.warn('Shop MCP returned non-OK response', {
-          toolName,
-          status: res.status,
-          statusText: res.statusText,
-          body: body.slice(0, 1000),
-        });
-        lastError = new Error(`Shop MCP ${res.status} ${res.statusText}: ${body}`);
-      } else {
-        const j = await res.json().catch(() => null) as any;
-        if (j && !j.error) {
-          console.log(`Shop MCP success for tool: ${toolName}`, {
-            result: j.result,
-            timestamp: new Date().toISOString(),
-          });
-          return { result: j.result };
-        }
-        lastError = new Error('Shop MCP returned invalid JSON payload');
-      }
-    } catch (err) {
-      const isAbortError = err instanceof Error && err.name === 'AbortError';
-      const isNetworkError = err instanceof TypeError;
-      if (isSearchCatalogTool && (isAbortError || isNetworkError)) {
-        console.warn('Shop MCP fetch aborted or network error for search_shop_catalog; returning fallback response', {
-          toolName,
-          error: err,
-          timestamp: new Date().toISOString(),
-        });
-        return { result: catalogFallbackResult };
-      }
-      console.warn(`Shop MCP failed for tool: ${toolName}, falling back`, {
-        error: err,
-        timestamp: new Date().toISOString(),
-      });
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-    finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  // Try internal worker MCP as a fallback
-  if (workerOrigin) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    try {
-      const workerUrl = `${String(workerOrigin).replace(/\/$/, '')}/mcp/tools/call`;
-      const res = await fetch(workerUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: originHeader },
-        body: JSON.stringify(rpc),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        if (isSearchCatalogTool && res.status === 522) {
-          console.warn('Worker MCP returned 522 for search_shop_catalog; returning fallback response', {
-            toolName,
-            status: res.status,
-            statusText: res.statusText,
-            body: body.slice(0, 500),
-          });
-          return { result: catalogFallbackResult };
-        }
-        console.warn('Worker MCP returned non-OK response', {
-          toolName,
-          status: res.status,
-          statusText: res.statusText,
-          body: body.slice(0, 1000),
-        });
-        lastError = new Error(`Worker MCP ${res.status} ${res.statusText}: ${body}`);
-        throw lastError;
-      }
-      const j = await res.json().catch(() => null) as any;
-      if (j && !j.error) {
-        return { result: j.result };
-      }
-    } catch (err) {
-      const isAbortError = err instanceof Error && err.name === 'AbortError';
-      const isNetworkError = err instanceof TypeError;
-      if (isSearchCatalogTool && (isAbortError || isNetworkError)) {
-        console.warn('Worker MCP fetch aborted or network error for search_shop_catalog; returning fallback response', {
-          toolName,
-          error: err,
-          timestamp: new Date().toISOString(),
-        });
-        return { result: catalogFallbackResult };
-      }
-      console.warn('callMcpToolDirect: worker MCP proxy failed:', err);
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-    finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  // If both endpoints fail, throw a clear error
-  console.error('callMcpToolDirect: All MCP endpoints failed', {
-    toolName,
-    arguments: args,
-    lastError,
-    timestamp: new Date().toISOString(),
-  });
-  throw new Error('Tool execution failed');
+  const { result, error } = await callShopMcp(env, toolName, args);
+  if (error) return { error };
+  return { result };
 }
 
 export async function handleMcpRequest(request: Request, env: Env): Promise<Response> {

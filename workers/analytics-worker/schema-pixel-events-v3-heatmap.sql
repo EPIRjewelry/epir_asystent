@@ -1,6 +1,21 @@
 -- ============================================================================
--- pixel_events Schema Extension for Full Spectrum Tracking
+-- ⚠️ DEPRECATED: pixel_events Schema Extension for Full Spectrum Tracking
 -- ============================================================================
+<<<<<<< HEAD
+-- ⚠️ WARNING: This file is DEPRECATED as of the schema consolidation update.
+-- ⚠️ All heatmap v3 columns are now included in schema-pixel-events-base.sql
+-- ⚠️ 
+-- ⚠️ DO NOT USE this file for new deployments.
+-- ⚠️ Use schema-pixel-events-base.sql instead, which contains all columns.
+-- ============================================================================
+-- 
+-- Purpose: This file previously added columns for heatmap data (click coordinates, 
+-- scroll depth, time on page) via ALTER TABLE statements.
+-- 
+-- Migration: This approach is now obsolete. The base schema includes all columns.
+-- 
+-- Historical Command: wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-v3-heatmap.sql
+=======
 -- ⚠️ DEPRECATED: This file is no longer needed as all columns are now
 --    defined in schema-pixel-events-base.sql
 --
@@ -8,6 +23,7 @@
 --          All columns are now included in the base schema for consistency.
 --
 -- Migration: Use schema-pixel-events-base.sql instead, which includes all fields.
+>>>>>>> origin/main
 -- ============================================================================
 
 -- ⚠️ DO NOT USE THIS FILE FOR NEW DATABASES
