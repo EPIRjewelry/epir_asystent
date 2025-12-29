@@ -3,12 +3,17 @@
 # Schema Consistency Verification Script
 # ============================================================================
 # Purpose: Verify that SQL schema files match the TypeScript implementation
-# Usage: ./verify-schema-consistency.sh
+# Usage: Run from workers/analytics-worker directory: ./verify-schema-consistency.sh
 # ============================================================================
 
 set -e
 
+# Determine script directory and change to it
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 echo "🔍 Verifying SQL Schema Consistency..."
+echo "📂 Working directory: $SCRIPT_DIR"
 echo ""
 
 # Colors for output
@@ -20,26 +25,30 @@ NC='\033[0m' # No Color
 # Check if schema files exist
 if [ ! -f "schema-pixel-events-base.sql" ]; then
     echo -e "${RED}❌ schema-pixel-events-base.sql not found${NC}"
+    echo "   Make sure you're running this script from workers/analytics-worker/"
     exit 1
 fi
 
 if [ ! -f "src/index.ts" ]; then
     echo -e "${RED}❌ src/index.ts not found${NC}"
+    echo "   Make sure you're running this script from workers/analytics-worker/"
     exit 1
 fi
 
 echo "📄 Checking schema-pixel-events-base.sql..."
+echo "   Note: Using simple pattern matching - checks actual schema definition lines"
+echo ""
 
-# Check for INTEGER PRIMARY KEY AUTOINCREMENT in SQL
-if grep -q "id INTEGER PRIMARY KEY AUTOINCREMENT" schema-pixel-events-base.sql; then
+# Check for INTEGER PRIMARY KEY AUTOINCREMENT in SQL (in CREATE TABLE context)
+if grep -E "^\s*id INTEGER PRIMARY KEY AUTOINCREMENT" schema-pixel-events-base.sql > /dev/null; then
     echo -e "${GREEN}✓${NC} SQL: id is INTEGER PRIMARY KEY AUTOINCREMENT"
 else
     echo -e "${RED}✗${NC} SQL: id is NOT INTEGER PRIMARY KEY AUTOINCREMENT"
     exit 1
 fi
 
-# Check for INTEGER timestamps in SQL
-if grep -q "created_at INTEGER NOT NULL" schema-pixel-events-base.sql; then
+# Check for INTEGER timestamps in SQL (in CREATE TABLE context)
+if grep -E "^\s*created_at INTEGER NOT NULL" schema-pixel-events-base.sql > /dev/null; then
     echo -e "${GREEN}✓${NC} SQL: created_at is INTEGER"
 else
     echo -e "${RED}✗${NC} SQL: created_at is NOT INTEGER"

@@ -149,19 +149,23 @@ CREATE INDEX IF NOT EXISTS idx_pixel_collection
 -- IMPORTANT: Use ONLY this file for new databases. Do NOT use the v3-heatmap file.
 --
 -- Migration Steps:
+-- Note: Replace <DATABASE_NAME> with your D1 database name (e.g., epir_art_jewellery)
 --
 -- 1. Test locally first:
---    wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-base.sql
+--    wrangler d1 execute <DATABASE_NAME> --local --file=./schema-pixel-events-base.sql
 --
 -- 2. Verify table was created correctly:
---    wrangler d1 execute epir_art_jewellery --local --command="PRAGMA table_info(pixel_events);"
+--    wrangler d1 execute <DATABASE_NAME> --local --command="PRAGMA table_info(pixel_events);"
 --
 -- 3. Test event insertion:
---    wrangler d1 execute epir_art_jewellery --local --command="INSERT INTO pixel_events (event_type, created_at) VALUES ('test', 1234567890); SELECT * FROM pixel_events WHERE event_type='test';"
+--    wrangler d1 execute <DATABASE_NAME> --local --command="INSERT INTO pixel_events (event_type, created_at) VALUES ('test', 1234567890); SELECT * FROM pixel_events WHERE event_type='test';"
 --
 -- 4. Deploy to production after testing:
---    wrangler d1 execute epir_art_jewellery --remote --file=./schema-pixel-events-base.sql
+--    wrangler d1 execute <DATABASE_NAME> --remote --file=./schema-pixel-events-base.sql
 --
 -- 5. Run schema verification (optional):
 --    ./verify-schema-consistency.sh
+--
+-- Example with actual database name:
+--    wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-base.sql
 -- ============================================================================
