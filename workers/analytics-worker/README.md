@@ -19,20 +19,37 @@ Shopify Storefront → my-web-pixel → POST /pixel → analytics-worker → D1 
 
 ## Database Schema
 
+### Schema Consistency (Updated 2025-12-29)
+
+**Important:** The SQL schema files and TypeScript code are now fully synchronized:
+- **Schema Source of Truth:** `schema-pixel-events-base.sql` matches the table structure in `index.ts`
+- **Unified Schema:** All heatmap v3 columns are now inline in the base schema
+- **DEPRECATED:** `schema-pixel-events-v3-heatmap.sql` is no longer needed (kept for reference only)
+
+**Key Schema Details:**
+- Primary key: `id INTEGER PRIMARY KEY AUTOINCREMENT` (not TEXT)
+- Timestamps: `INTEGER` type using Unix milliseconds (not TEXT with datetime())
+- All 25+ event types supported with a single unified table structure
+
 ### pixel_events Table
 Stores all tracking events with:
-- Basic event metadata (type, timestamp)
-- Customer & session identification
-- Product information (for product-related events)
-- Cart information (for cart events)
-- Page context (URL, title, type)
-- Heatmap data (click coordinates, scroll depth, time on page)
-- Search & collection data
-- Checkout & order information
+- **Event identification:** auto-increment integer ID, event type, event name
+- **Customer & session identification:** customer_id, session_id
+- **Product information:** product_id, product_handle, product_type, product_vendor, product_title, variant_id
+- **Cart information:** cart_id
+- **Page context:** page_url, page_title, page_type
+- **Timestamps:** created_at (INTEGER, Unix milliseconds)
+- **Heatmap data:** click_x, click_y, viewport_w, viewport_h, scroll_depth_percent, time_on_page_seconds
+- **DOM tracking:** element_tag, element_id, element_class, input_name, form_id
+- **Search & collection:** search_query, collection_id, collection_handle
+- **Checkout & order:** checkout_token, order_id, order_value
+- **Alerts & errors:** alert_type, alert_message, error_message, extension_id
+- **Mouse tracking:** mouse_x, mouse_y
+- **Raw payload:** event_data (JSON)
 
 ### customer_sessions Table
 Aggregates customer behavior by session:
-- Event counts and timestamps
+- Event counts and timestamps (INTEGER, Unix milliseconds)
 - AI engagement scores
 - Proactive chat activation flags
 
@@ -205,8 +222,10 @@ All logs use the prefix `[ANALYTICS_WORKER]` with emoji indicators:
 - Check logs for table creation messages
 
 **Issue: Schema mismatch**
-- Solution: The code uses INTEGER timestamps and AUTOINCREMENT id
+- Solution: Run the schema verification script: `./verify-schema-consistency.sh`
+- The code uses INTEGER timestamps and AUTOINCREMENT id
 - If you manually created the table, ensure it matches the schema in `ensurePixelTable()`
+- SQL schema file: `schema-pixel-events-base.sql` should match TypeScript implementation
 
 **Issue: Events show in logs but not in database**
 - Check the INSERT result metadata in logs
@@ -214,6 +233,18 @@ All logs use the prefix `[ANALYTICS_WORKER]` with emoji indicators:
 - Check D1 database size hasn't exceeded limits
 
 ## Development
+
+### Schema Consistency Verification
+Verify that SQL schema files match the TypeScript implementation:
+```bash
+./verify-schema-consistency.sh
+```
+
+This script checks:
+- ✓ SQL and TypeScript use same data types (INTEGER vs TEXT)
+- ✓ All heatmap v3 columns are present in base schema
+- ✓ Deprecated files are properly marked
+- ✓ Primary key and timestamp definitions match
 
 ### Running Tests
 ```bash
@@ -233,6 +264,7 @@ npm run deploy        # Deploy to Cloudflare
 
 ## Schema Migration
 
+<<<<<<< HEAD
 The worker auto-creates tables using the schema defined in `src/index.ts`, but you can also run migrations manually:
 
 **Complete schema (includes all heatmap v3 columns):**
@@ -241,6 +273,37 @@ wrangler d1 execute epir_art_jewellery --file=./schema-pixel-events-base.sql
 ```
 
 **Note:** The file `schema-pixel-events-v3-heatmap.sql` is now DEPRECATED. All columns (including heatmap v3) are now defined in `schema-pixel-events-base.sql` to match the D1 schema in `src/index.ts`.
+=======
+**Current Schema (v3 - Unified):**
+The worker auto-creates tables using the unified schema defined in `schema-pixel-events-base.sql`.
+
+**Manual Migration (if needed):**
+
+1. **Base schema (recommended):**
+   ```bash
+   wrangler d1 execute epir_art_jewellery --local --file=./schema-pixel-events-base.sql
+   ```
+
+2. **For production:**
+   ```bash
+   wrangler d1 execute epir_art_jewellery --remote --file=./schema-pixel-events-base.sql
+   ```
+>>>>>>> origin/main
+
+3. **Verify schema:**
+   ```bash
+   wrangler d1 execute epir_art_jewellery --local --command="PRAGMA table_info(pixel_events);"
+   ```
+
+**Legacy Schema Files:**
+- ⚠️ `schema-pixel-events-v3-heatmap.sql` is DEPRECATED (all columns are now in base schema)
+- Do not use the heatmap file for new databases
+
+**Schema Consistency:**
+The TypeScript code in `index.ts` exactly matches `schema-pixel-events-base.sql`:
+- Both use `INTEGER PRIMARY KEY AUTOINCREMENT` for id
+- Both use `INTEGER` timestamps (Unix milliseconds)
+- Both include all heatmap v3 columns inline
 
 ## Integration with Other Services
 
