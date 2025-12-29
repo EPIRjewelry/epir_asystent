@@ -729,7 +729,7 @@ export default {
       }
 
       const signature = authHeader;
-      const validSignature = verifyAppProxyHmac(request, env.SHOPIFY_APP_SECRET);
+      const validSignature = await verifyAppProxyHmac(request, env.SHOPIFY_APP_SECRET);
       if (!validSignature) {
         return new Response(JSON.stringify({ error: 'Invalid signature' }), {
           status: 403,
