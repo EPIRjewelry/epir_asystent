@@ -3,14 +3,17 @@
   "private": true,
   "workspaces": [
     "extensions/*",
-    "worker"
+    "worker",
+    "hydrogen"
   ],
   "scripts": {
     "test:e2e": "playwright test",
     "dev": "shopify app dev",
     "deploy": "shopify app deploy",
     "worker:dev": "wrangler dev",
-    "worker:deploy": "wrangler deploy"
+    "worker:deploy": "wrangler deploy",
+    "hydrogen:dev": "cd hydrogen && npm run dev",
+    "hydrogen:deploy": "cd hydrogen && npm run deploy"
   }
   ,
   "devDependencies": {

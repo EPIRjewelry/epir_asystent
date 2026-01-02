@@ -57,6 +57,9 @@ export interface MessageRecord {
   
   /** Optional tool name (for tool response messages) */
   name?: string;
+
+  /** Optional token usage for analytics */
+  tokens?: number;
 }
 
 /**
@@ -74,6 +77,12 @@ export interface SessionMetadata {
   
   /** Customer last name */
   last_name?: string;
+
+  /** Preferred shop domain for analytics */
+  shop_domain?: string;
+
+  /** Extracted or stored customer preferences */
+  preferences?: unknown;
   
   /** Session creation timestamp */
   created_at: number;
@@ -96,6 +105,9 @@ export class SessionDO {
   private state: DurableObjectState;
   private messages: MessageRecord[] = [];
   private metadata: SessionMetadata;
+  private db?: D1Database;
+  private readonly sessionId: string;
+  private readonly INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
   
   // Rate limiting
   private lastRequestTime = 0;
@@ -109,6 +121,8 @@ export class SessionDO {
   
   constructor(state: DurableObjectState, env: any) {
     this.state = state;
+    this.db = (env as { DB?: D1Database }).DB;
+    this.sessionId = this.state.id.toString();
     
     // Initialize metadata
     this.metadata = {
@@ -153,6 +167,10 @@ export class SessionDO {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
+
+    if (method === 'POST') {
+      await this.state.storage.setAlarm(Date.now() + this.INACTIVITY_TIMEOUT_MS);
+    }
     
     try {
       // GET /messages - List all messages
@@ -271,6 +289,16 @@ export class SessionDO {
       
       // Update metadata
       this.metadata.last_activity = Date.now();
+
+      this.state.waitUntil(
+        this.logMessageToD1(
+          this.sessionId,
+          messageWithTimestamp.role,
+          messageWithTimestamp.content,
+          messageWithTimestamp.tokens,
+          messageWithTimestamp.timestamp
+        )
+      );
       
       // Check if we need to archive
       if (this.messages.length > this.ARCHIVE_THRESHOLD) {
@@ -284,6 +312,55 @@ export class SessionDO {
     } catch (error) {
       console.error('SessionDO: Error saving message:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Log a message asynchronously to D1 without blocking responses.
+   */
+  private async logMessageToD1(
+    sessionId: string,
+    role: MessageRecord['role'],
+    content: string,
+    tokens?: number,
+    timestamp?: number
+  ): Promise<void> {
+    if (!this.db) {
+      return;
+    }
+
+    const now = Date.now();
+    const messageTimestamp = timestamp ?? now;
+
+    try {
+      const customerId = this.metadata.customer_id ?? null;
+      const shopDomain = this.metadata.shop_domain ?? null;
+      const preferences = this.metadata.preferences ? JSON.stringify(this.metadata.preferences) : null;
+
+      await this.db
+        .prepare(
+          `INSERT OR IGNORE INTO sessions (id, customer_id, shop_domain, status, summary, preferences, created_at, updated_at)
+           VALUES (?1, ?2, ?3, 'open', NULL, ?4, ?5, ?5)`
+        )
+        .bind(sessionId, customerId, shopDomain, preferences, now)
+        .run();
+
+      await this.db
+        .prepare(
+          `INSERT INTO chat_messages (session_id, role, content, tokens, timestamp)
+           VALUES (?1, ?2, ?3, ?4, ?5)`
+        )
+        .bind(sessionId, role, content, tokens ?? null, messageTimestamp)
+        .run();
+
+      await this.db
+        .prepare(
+          `UPDATE sessions SET updated_at = ?1, status = 'open' WHERE id = ?2`
+        )
+        .bind(messageTimestamp, sessionId)
+        .run();
+    } catch (error) {
+      console.error('SessionDO: logMessageToD1 failed:', error);
     }
   }
   
@@ -374,6 +451,81 @@ export class SessionDO {
     } catch (error) {
       console.error('SessionDO: Error archiving messages:', error);
       return 0;
+    }
+  }
+
+  /**
+   * Alarm handler triggered after inactivity window.
+   * Generates summary placeholder, closes session, and upserts customer profile.
+   */
+  async alarm(): Promise<void> {
+    if (!this.db) {
+      return;
+    }
+
+    try {
+      const storedMessages = await this.state.storage.get<MessageRecord[]>('messages');
+      const storedMetadata = await this.state.storage.get<SessionMetadata>('metadata');
+
+      if (storedMessages && Array.isArray(storedMessages)) {
+        this.messages = storedMessages;
+      }
+
+      if (storedMetadata) {
+        this.metadata = {
+          ...this.metadata,
+          ...storedMetadata
+        };
+      }
+
+      const summary = 'Session summary placeholder';
+      const preferences = this.metadata.preferences ? JSON.stringify(this.metadata.preferences) : null;
+      const now = Date.now();
+
+      await this.db
+        .prepare(
+          `INSERT OR IGNORE INTO sessions (id, customer_id, shop_domain, status, summary, preferences, created_at, updated_at)
+           VALUES (?1, ?2, ?3, 'open', NULL, ?4, ?5, ?5)`
+        )
+        .bind(
+          this.sessionId,
+          this.metadata.customer_id ?? null,
+          this.metadata.shop_domain ?? null,
+          preferences,
+          now
+        )
+        .run();
+
+      await this.db
+        .prepare(
+          `UPDATE sessions
+             SET status = 'closed', summary = ?1, preferences = ?2, updated_at = ?3
+           WHERE id = ?4`
+        )
+        .bind(summary, preferences, now, this.sessionId)
+        .run();
+
+      if (this.metadata.customer_id) {
+        await this.db
+          .prepare(
+            `INSERT INTO customer_profiles (customer_id, shop_domain, global_preferences, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(customer_id) DO UPDATE SET
+               shop_domain = excluded.shop_domain,
+               global_preferences = excluded.global_preferences,
+               updated_at = excluded.updated_at`
+          )
+          .bind(
+            this.metadata.customer_id,
+            this.metadata.shop_domain ?? null,
+            preferences,
+            now,
+            now
+          )
+          .run();
+      }
+    } catch (error) {
+      console.error('SessionDO: alarm handler failed:', error);
     }
   }
   

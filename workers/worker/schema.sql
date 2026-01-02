@@ -1,3 +1,38 @@
+-- Session persistence for Durable Object + D1
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT,
+  shop_domain TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  summary TEXT,
+  preferences TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tokens INTEGER,
+  timestamp INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS customer_profiles (
+  customer_id TEXT PRIMARY KEY,
+  shop_domain TEXT,
+  global_preferences TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Helper to prime ON CONFLICT(customer_id) upsert path
+INSERT INTO customer_profiles (customer_id, shop_domain, global_preferences, created_at, updated_at)
+VALUES ('__bootstrap__', NULL, NULL, strftime('%s','now') * 1000, strftime('%s','now') * 1000)
+ON CONFLICT(customer_id) DO UPDATE SET updated_at = excluded.updated_at;
+
 -- D1 schema for conversations/messages
 CREATE TABLE IF NOT EXISTS conversations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
