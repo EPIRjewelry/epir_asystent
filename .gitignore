@@ -36,3 +36,4 @@ playwright-report/
 *.backup
 *.bak
 *.old
+.venv
