@@ -29,8 +29,7 @@ import {
 } from './ai-client';
 import { GROQ_MODEL_ID } from './config/model-params';
 import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt'; // 🟢 Używa nowego promptu v2
-import { TOOL_SCHEMAS } from './mcp_tools'; // 🟢 Używa poprawionych schematów v2
-import { callMcpToolDirect, handleMcpRequest } from './mcp_server';
+import { TOOL_SCHEMAS } from './mcp_tools'; // 🟢 Używa poprawionych schematów v2import { truncateWithSummary } from './utils/history'; // 🟢 History truncationimport { callMcpToolDirect, handleMcpRequest } from './mcp_server';
 
 // Importy RAG (teraz używane tylko przez narzędzia, a nie przez index.ts)
 import {
@@ -80,6 +79,7 @@ export interface Env {
   GROQ_API_KEY: string;
   DEV_BYPASS?: string;
   WORKER_ORIGIN?: string;
+  EPIR_INTERNAL_KEY?: string;
   // AI_WORKER removed - using direct ai-client.ts only
   RAG_WORKER?: Fetcher;
 }
@@ -597,12 +597,16 @@ async function streamAssistantResponse(
       messages.push(...aiHistory);
       // Wiadomość użytkownika (ostatnia) jest już w `aiHistory`
 
+      // 🟢 KROK 3c: TRUNCATE HISTORY - zredukuj długość kontekstu przed wysłaniem do AI
+      // Cel: Zapobiegaj overflow kontekstu, oszczędzaj tokeny, zwiększ szybkość
+      const truncatedMessages = truncateWithSummary(messages, 8000, 12);
+      
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       console.log(`[streamAssistant] Rozpoczynam pętlę AI. Sesja: ${sessionId}`);
       console.log('[streamAssistant] 🤖 Model (HARDCODED):', GROQ_MODEL_ID);
       console.log('[streamAssistant] 📜 System Prompt length:', LUXURY_SYSTEM_PROMPT.length, 'chars');
-      console.log('[streamAssistant] 📚 History entries:', aiHistory.length);
-      console.log('[streamAssistant] 📨 Total messages (do AI):', messages.length);
+      console.log('[streamAssistant] 📚 History entries (before truncation):', aiHistory.length);
+      console.log('[streamAssistant] 📨 Total messages (after truncation):', truncatedMessages.length);
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
       // Weryfikacja klucza Groq
@@ -612,7 +616,7 @@ async function streamAssistantResponse(
       }
 
       // 🔴 KROK 4: PĘTLA WYWOŁAŃ NARZĘDZI (native tool_calls)
-      let currentMessages: GroqMessage[] = messages;
+      let currentMessages: GroqMessage[] = truncatedMessages; // 🟢 Używamy obciętej historii
       const MAX_TOOL_CALLS = 5;
       
       // 🔴 FIX: accumulatedResponse poza pętlą - nie resetuj w każdej iteracji

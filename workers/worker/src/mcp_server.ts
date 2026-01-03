@@ -23,6 +23,8 @@ import {
   createJsonRpcError 
 } from './utils/jsonrpc';
 import type { Env } from './index';
+import { normalizeCartId, isValidCartGid } from './utils/cart';
+import { withRetry } from './utils/retry';
 
 type JsonRpcId = string | number | null;
 
@@ -46,6 +48,14 @@ const CATALOG_FALLBACK = {
   products: [],
   system_note: 'Sklep jest chwilowo niedostępny (Connection Timeout). Poinformuj klienta o problemie technicznym.'
 };
+
+function verifyInternalKey(env: Env, request: Request): { ok: boolean; message?: string } {
+  const expected = env.EPIR_INTERNAL_KEY || (process.env as any)?.EPIR_INTERNAL_KEY;
+  if (!expected) return { ok: true }; // brak klucza -> nie wymuszamy
+  const provided = request.headers.get('X-EPIR-Internal-Key');
+  if (provided && provided === expected) return { ok: true };
+  return { ok: false, message: 'Unauthorized: Missing or invalid X-EPIR-Internal-Key' };
+}
 
 function safeArgsSummary(args: any) {
   if (!args || typeof args !== 'object') return {};
@@ -71,13 +81,55 @@ function normalizeSearchArgs(raw: any) {
   return args;
 }
 
+/**
+ * Normalize cart-related arguments before calling MCP
+ * Fixes cart_id format issues (spaces, missing key, invalid GID)
+ */
+function normalizeCartArgs(raw: any, sessionCartKey?: string): any {
+  const args = { ...raw };
+  
+  // Normalize cart_id if present
+  if (args.cart_id) {
+    const normalized = normalizeCartId(args.cart_id, sessionCartKey);
+    
+    if (!normalized) {
+      console.warn('[normalizeCartArgs] Invalid cart_id, keeping original:', args.cart_id);
+      return args;
+    }
+    
+    args.cart_id = normalized;
+    console.log('[normalizeCartArgs] Normalized cart_id:', { original: raw.cart_id, normalized });
+  }
+  
+  return args;
+}
+
 async function callShopMcp(env: Env, toolName: string, rawArgs: any): Promise<{ result?: any; error?: any }> {
   const shopDomain = env?.SHOP_DOMAIN || process.env.SHOP_DOMAIN;
   if (!shopDomain) {
     return { error: { code: -32602, message: 'SHOP_DOMAIN not configured' } };
   }
 
-  const args = toolName === 'search_shop_catalog' ? normalizeSearchArgs(rawArgs) : rawArgs ?? {};
+  // Normalize arguments based on tool type
+  let args: any;
+  if (toolName === 'search_shop_catalog') {
+    args = normalizeSearchArgs(rawArgs);
+  } else if (toolName === 'get_cart' || toolName === 'update_cart') {
+    args = normalizeCartArgs(rawArgs ?? {});
+    
+    // Validate cart_id for cart operations
+    if (args.cart_id && !isValidCartGid(args.cart_id) && !args.cart_id.startsWith('?key=')) {
+      console.warn(`[callShopMcp] Invalid cart_id format for ${toolName}:`, args.cart_id);
+      return { 
+        error: { 
+          code: -32602, 
+          message: 'Invalid cart_id format. Expected a Shopify Cart GID (e.g., \'gid://shopify/Cart/<id>?key=...\')' 
+        } 
+      };
+    }
+  } else {
+    args = rawArgs ?? {};
+  }
 
   const rpc: JsonRpcRequest = {
     jsonrpc: '2.0',
@@ -257,6 +309,14 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
   const isAppProxy = url.pathname === '/apps/assistant/mcp';
   if (request.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405, headers: json() });
+  }
+
+  // Internal key check (dla wywołań z Hydrogen/SSR, nie dotyczy App Proxy)
+  if (!isAppProxy) {
+    const internalCheck = verifyInternalKey(env, request);
+    if (!internalCheck.ok) {
+      return new Response(internalCheck.message ?? 'Unauthorized', { status: 401, headers: json() });
+    }
   }
 
   if (isAppProxy) {

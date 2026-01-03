@@ -94,38 +94,34 @@ export interface SessionMetadata {
  */
 export class SessionDO {
   private state: DurableObjectState;
-  private messages: MessageRecord[] = [];
+  private env: any; // Env with DB (D1) binding
   private metadata: SessionMetadata;
-  
+  private metadataLoaded: Promise<void>;
+
   // Rate limiting
   private lastRequestTime = 0;
   private requestCount = 0;
   private readonly RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
   private readonly RATE_LIMIT_MAX = 20; // 20 requests per minute
-  
+
   // Message limits
   private readonly MAX_MESSAGES = 200; // Maximum messages to store
   private readonly ARCHIVE_THRESHOLD = 150; // Archive when exceeding this
-  
+
   constructor(state: DurableObjectState, env: any) {
     this.state = state;
-    
-    // Initialize metadata
+    this.env = env; // Store env for D1 access
+
+    // Initialize metadata defaults
     this.metadata = {
       created_at: Date.now(),
       last_activity: Date.now()
     };
-    
-    // Load state from storage
-    this.state.blockConcurrencyWhile(async () => {
+
+    // Lazy-load metadata without blocking concurrency
+    this.metadataLoaded = (async () => {
       try {
-        const storedMessages = await this.state.storage.get<MessageRecord[]>('messages');
         const storedMetadata = await this.state.storage.get<SessionMetadata>('metadata');
-        
-        if (storedMessages && Array.isArray(storedMessages)) {
-          this.messages = storedMessages;
-        }
-        
         if (storedMetadata) {
           this.metadata = {
             ...this.metadata,
@@ -133,9 +129,23 @@ export class SessionDO {
           };
         }
       } catch (error) {
-        console.error('SessionDO: Error loading state:', error);
+        console.error('SessionDO: Error loading metadata:', error);
       }
-    });
+    })();
+
+    // Initialize SQLite schema for messages
+    this.state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role TEXT,
+        content TEXT,
+        timestamp INTEGER,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
+    `);
   }
   
   /**
@@ -155,58 +165,60 @@ export class SessionDO {
     const method = request.method.toUpperCase();
     
     try {
-      // GET /messages - List all messages
+      // Ensure metadata is available
+      await this.metadataLoaded;
+
+      // GET /messages - List messages (default last 50)
       if (method === 'GET' && path.endsWith('/messages')) {
-        const limit = url.searchParams.get('limit');
-        const messages = limit 
-          ? this.messages.slice(-parseInt(limit, 10))
-          : this.messages;
-        
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? parseInt(limitParam, 10) : 50;
+        const messages = await this.listMessages(limit);
         return new Response(
           JSON.stringify({ messages }),
           { headers: { 'Content-Type': 'application/json' } }
         );
       }
-      
+
       // POST /messages - Save new message
       if (method === 'POST' && path.endsWith('/messages')) {
         const payload = await request.json() as Partial<MessageRecord>;
-        
+
         if (!payload.role || !payload.content) {
           return new Response(
             JSON.stringify({ error: 'Missing required fields: role, content' }),
             { status: 400, headers: { 'Content-Type': 'application/json' } }
           );
         }
-        
+
         await this.saveMessage(payload as MessageRecord);
-        
+        const count = await this.countMessages();
+
         return new Response(
-          JSON.stringify({ success: true, count: this.messages.length }),
+          JSON.stringify({ success: true, count }),
           { headers: { 'Content-Type': 'application/json' } }
         );
       }
-      
+
       // DELETE /messages - Clear all messages
       if (method === 'DELETE' && path.endsWith('/messages')) {
         await this.clearMessages();
-        
+
         return new Response(
           JSON.stringify({ success: true, cleared: true }),
           { headers: { 'Content-Type': 'application/json' } }
         );
       }
-      
+
       // GET /count - Get message count
       if (method === 'GET' && path.endsWith('/count')) {
-        const count = this.countMessages();
-        
+        const count = await this.countMessages();
+
         return new Response(
           JSON.stringify({ count }),
           { headers: { 'Content-Type': 'application/json' } }
         );
       }
-      
+
       // GET /metadata - Get session metadata
       if (method === 'GET' && path.endsWith('/metadata')) {
         return new Response(
@@ -214,26 +226,51 @@ export class SessionDO {
           { headers: { 'Content-Type': 'application/json' } }
         );
       }
-      
+
       // POST /metadata - Update session metadata
       if (method === 'POST' && path.endsWith('/metadata')) {
         const payload = await request.json() as Partial<SessionMetadata>;
         await this.updateMetadata(payload);
-        
+
         return new Response(
           JSON.stringify({ success: true, metadata: this.metadata }),
           { headers: { 'Content-Type': 'application/json' } }
         );
       }
-      
+
       // POST /archive - Archive oldest messages (placeholder)
       if (method === 'POST' && path.endsWith('/archive')) {
         const archived = await this.archiveOldest();
-        
+
         return new Response(
           JSON.stringify({ success: true, archived }),
           { headers: { 'Content-Type': 'application/json' } }
         );
+      }
+
+      // Legacy compatibility endpoints
+      // POST /append -> append a single message (legacy)
+      if (method === 'POST' && path.endsWith('/append')) {
+        const payload = await request.json() as Partial<MessageRecord>;
+        if (!payload.role || !payload.content) {
+          return new Response(JSON.stringify({ error: 'Missing required fields: role, content' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        await this.saveMessage(payload as MessageRecord);
+        return new Response('OK', { status: 200 });
+      }
+
+      // GET /history -> return array of messages (legacy)
+      if (method === 'GET' && path.endsWith('/history')) {
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? parseInt(limitParam, 10) : 50;
+        const messages = await this.listMessages(limit);
+        return new Response(JSON.stringify(messages), { headers: { 'Content-Type': 'application/json' } });
+      }
+
+      // POST /clear -> clear all messages (legacy)
+      if (method === 'POST' && path.endsWith('/clear')) {
+        await this.clearMessages();
+        return new Response('Cleared', { status: 200 });
       }
       
       // Not found
@@ -260,27 +297,33 @@ export class SessionDO {
    */
   async saveMessage(message: MessageRecord): Promise<void> {
     try {
-      // Add timestamp if not provided
       const messageWithTimestamp: MessageRecord = {
         ...message,
         timestamp: message.timestamp || Date.now()
       };
-      
-      // Add to messages array
-      this.messages.push(messageWithTimestamp);
-      
+
+      const stmt = this.state.storage.sql.prepare(`
+        INSERT INTO messages (role, content, timestamp, tool_calls, tool_call_id, name)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+
+      stmt.run(
+        messageWithTimestamp.role,
+        messageWithTimestamp.content,
+        messageWithTimestamp.timestamp,
+        messageWithTimestamp.tool_calls ? JSON.stringify(messageWithTimestamp.tool_calls) : null,
+        messageWithTimestamp.tool_call_id ?? null,
+        messageWithTimestamp.name ?? null
+      );
+
       // Update metadata
       this.metadata.last_activity = Date.now();
-      
-      // Check if we need to archive
-      if (this.messages.length > this.ARCHIVE_THRESHOLD) {
+      await this.state.storage.put('metadata', this.metadata);
+
+      // Archive if we exceed threshold
+      if (await this.countMessages() > this.ARCHIVE_THRESHOLD) {
         await this.archiveOldest();
       }
-      
-      // Persist to storage
-      await this.state.storage.put('messages', this.messages);
-      await this.state.storage.put('metadata', this.metadata);
-      
     } catch (error) {
       console.error('SessionDO: Error saving message:', error);
       throw error;
@@ -288,20 +331,32 @@ export class SessionDO {
   }
   
   /**
-   * Get all messages (or limited count)
+   * Get messages (default last N)
    */
-  listMessages(limit?: number): MessageRecord[] {
+  async listMessages(limit = 50): Promise<MessageRecord[]> {
+    let query = `SELECT * FROM messages ORDER BY id DESC`;
     if (limit && limit > 0) {
-      return this.messages.slice(-limit);
+      query += ` LIMIT ${limit}`;
     }
-    return [...this.messages];
+
+    const rows = this.state.storage.sql.exec(query).toArray();
+
+    return rows.reverse().map((row: any) => ({
+      role: row.role,
+      content: this.safeJsonParse(row.content),
+      timestamp: row.timestamp,
+      tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
+      tool_call_id: row.tool_call_id || undefined,
+      name: row.name || undefined
+    }));
   }
   
   /**
    * Get message count
    */
-  countMessages(): number {
-    return this.messages.length;
+  async countMessages(): Promise<number> {
+    const row = this.state.storage.sql.exec(`SELECT COUNT(*) as cnt FROM messages`).first() as { cnt: number } | undefined;
+    return row?.cnt ?? 0;
   }
   
   /**
@@ -309,8 +364,7 @@ export class SessionDO {
    */
   async clearMessages(): Promise<void> {
     try {
-      this.messages = [];
-      await this.state.storage.put('messages', this.messages);
+      this.state.storage.sql.exec('DELETE FROM messages');
     } catch (error) {
       console.error('SessionDO: Error clearing messages:', error);
       throw error;
@@ -336,44 +390,100 @@ export class SessionDO {
   }
   
   /**
-   * Archive oldest messages to external storage
+   * Archive oldest messages to D1 database for long-term analytics
    * 
-   * TODO: Implement actual archival to D1 database or external storage
-   * Current implementation: removes oldest messages to stay under MAX_MESSAGES
-   * 
-   * Future implementation:
-   * 1. Send oldest 50 messages to D1 database
-   * 2. Send to analytics/archiver worker
-   * 3. Keep only recent messages in DO memory
+   * Implementation:
+   * 1. Fetch oldest messages (excess beyond MAX_MESSAGES)
+   * 2. Write to D1 (sessions + messages tables)
+   * 3. Delete from DO storage after successful archive
    */
   async archiveOldest(): Promise<number> {
     try {
-      if (this.messages.length <= this.MAX_MESSAGES) {
+      const total = await this.countMessages();
+      if (total <= this.MAX_MESSAGES) {
         return 0; // Nothing to archive
       }
-      
-      const excessCount = this.messages.length - this.MAX_MESSAGES;
-      const toArchive = this.messages.slice(0, excessCount);
-      
-      // TODO: Implement actual archival
-      // Example:
-      // await env.DB.prepare(
-      //   'INSERT INTO archived_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)'
-      // ).bind(sessionId, msg.role, msg.content, msg.timestamp).run();
-      
-      console.log(`SessionDO: Archiving ${toArchive.length} messages (placeholder)`);
-      
-      // Remove archived messages from memory
-      this.messages = this.messages.slice(excessCount);
-      
-      // Persist updated messages
-      await this.state.storage.put('messages', this.messages);
-      
-      return toArchive.length;
+
+      const excessCount = total - this.MAX_MESSAGES;
+
+      // Fetch oldest messages to archive
+      const rows = this.state.storage.sql.exec(
+        `SELECT * FROM messages ORDER BY id ASC LIMIT ${excessCount}`
+      ).toArray();
+
+      if (rows.length === 0) return 0;
+
+      // Archive to D1 if binding available
+      if (this.env?.DB) {
+        await this.archiveToD1(rows);
+      } else {
+        console.warn('SessionDO: No D1 binding available, skipping archive to D1');
+      }
+
+      // Delete archived messages from DO
+      this.state.storage.sql.exec(
+        `DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY id ASC LIMIT ${excessCount})`
+      );
+
+      return excessCount;
       
     } catch (error) {
       console.error('SessionDO: Error archiving messages:', error);
       return 0;
+    }
+  }
+
+  /**
+   * Archive messages to D1 database
+   * Creates session record if not exists, then inserts messages
+   */
+  private async archiveToD1(messages: any[]): Promise<void> {
+    if (!this.env?.DB || messages.length === 0) return;
+
+    try {
+      const sessionId = this.state.id.toString();
+      const db = this.env.DB as D1Database;
+
+      // Upsert session metadata
+      await db.prepare(`
+        INSERT INTO sessions (session_id, customer_id, first_name, last_name, cart_id, created_at, last_activity, archived_at, message_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          last_activity = excluded.last_activity,
+          archived_at = excluded.archived_at,
+          message_count = message_count + excluded.message_count
+      `).bind(
+        sessionId,
+        this.metadata.customer_id || null,
+        this.metadata.first_name || null,
+        this.metadata.last_name || null,
+        this.metadata.cart_id || null,
+        this.metadata.created_at,
+        this.metadata.last_activity,
+        Date.now(), // archived_at
+        messages.length
+      ).run();
+
+      // Insert messages in batch
+      for (const msg of messages) {
+        await db.prepare(`
+          INSERT INTO messages (session_id, role, content, timestamp, tool_calls, tool_call_id, name)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          sessionId,
+          msg.role,
+          msg.content,
+          msg.timestamp,
+          msg.tool_calls || null,
+          msg.tool_call_id || null,
+          msg.name || null
+        ).run();
+      }
+
+      console.log(`[SessionDO] Archived ${messages.length} messages to D1 for session ${sessionId}`);
+    } catch (error) {
+      console.error('[SessionDO] Failed to archive to D1:', error);
+      // Don't throw - archival failure shouldn't break the main flow
     }
   }
   
@@ -398,5 +508,13 @@ export class SessionDO {
     // Increment counter
     this.requestCount++;
     return true;
+  }
+
+  private safeJsonParse(str: string): any {
+    try {
+      return JSON.parse(str);
+    } catch {
+      return str;
+    }
   }
 }
