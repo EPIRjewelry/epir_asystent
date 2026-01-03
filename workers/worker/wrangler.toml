@@ -19,6 +19,11 @@ binding = "DB"
 database_name = "jewelry-analytics-db"
 database_id = "6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23"
 
+[[d1_databases]]
+binding = "DB_CHATBOT"
+database_name = "ai-assistant-sessions-db"
+database_id = "475a1cb7-f1b5-47ba-94ed-40fd64c32451"
+
 [[kv_namespaces]]
 binding = "SESSIONS_KV"
 id = "08f16276a9b14ca7b3c00404e8e8d0d9"

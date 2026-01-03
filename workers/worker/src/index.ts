@@ -65,6 +65,7 @@ interface ChatRequestBody {
 
 export interface Env {
   DB: D1Database;
+  DB_CHATBOT: D1Database;
   SESSIONS_KV: KVNamespace;
   SESSION_DO: DurableObjectNamespace;
   RATE_LIMITER_DO: DurableObjectNamespace;

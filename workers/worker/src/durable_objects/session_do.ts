@@ -414,10 +414,10 @@ export class SessionDO {
       if (rows.length === 0) return 0;
 
       // Archive to D1 if binding available
-      if (this.env?.DB) {
+      if (this.env?.DB_CHATBOT) {
         await this.archiveToD1(rows);
       } else {
-        console.warn('SessionDO: No D1 binding available, skipping archive to D1');
+        console.warn('SessionDO: No DB_CHATBOT binding available, skipping archive to D1');
       }
 
       // Delete archived messages from DO
@@ -438,11 +438,11 @@ export class SessionDO {
    * Creates session record if not exists, then inserts messages
    */
   private async archiveToD1(messages: any[]): Promise<void> {
-    if (!this.env?.DB || messages.length === 0) return;
+    if (!this.env?.DB_CHATBOT || messages.length === 0) return;
 
     try {
       const sessionId = this.state.id.toString();
-      const db = this.env.DB as D1Database;
+      const db = this.env.DB_CHATBOT as D1Database;
 
       // Upsert session metadata
       await db.prepare(`
