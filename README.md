@@ -151,6 +151,12 @@ cd workers/analytics-worker
 
 This script sends test events with various `page_url` formats and provides verification commands. See `VERIFICATION.md` for detailed verification steps.
 
+## 📚 Stan dokumentacji — uwaga
+
+W repozytorium znajduje się wiele historycznych plików dokumentacyjnych (PR_*, REFACTORING_*, MCP_*, itp.), które mogą być nieaktualne lub wprowadzać w błąd. Aby ułatwić orientację, wszystkie podejrzane o nieaktualność pliki zostały zebrane w spisie: `docs/ARCHIVED_DOCS.md` oraz krótkim archiwum pod `docs/archive/`.
+
+Zalecenie: przed usunięciem któregokolwiek z plików z archiwum wykonaj kopię zapasową i skonsultuj listę z zespołem. Pliki archiwalne pozostają w repozytorium, ale oznaczone jako historyczne.
+
 Troubleshooting (częste problemy)
 --------------------------------
 ### Błąd: "error code: 1042" lub "insert_failed"

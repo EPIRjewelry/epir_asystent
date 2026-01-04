@@ -6,87 +6,13 @@
 ```
 workers/worker/src/
 ├── rag.ts (718 lines)
-│   ├── isString() ❌ duplicated
-│   ├── isRecord() ❌ duplicated  
-│   ├── safeJsonParse() ❌ duplicated
-│   ├── asStringField() ❌ duplicated
-│   └── callMcpTool() with retry ❌ duplicated
-├── shopify-mcp-client.ts (438 lines)
-│   ├── adminGraphql() ❌ duplicated
-│   ├── JsonRpcRequest ❌ duplicated
-│   └── JsonRpcResponse ❌ duplicated
-└── mcp_server.ts (367 lines)
-    ├── adminGraphql() ❌ duplicated
-    ├── JsonRpcRequest ❌ duplicated
-    └── JsonRpcResponse ❌ duplicated
+# Refactoring Impact Analysis
 
-workers/rag-worker/src/services/
-└── shopify-mcp.ts (265 lines)
-    ├── isString() ❌ duplicated
-    ├── isRecord() ❌ duplicated
-    ├── safeJsonParse() ❌ duplicated
-    └── callShopifyMcp() with retry ❌ duplicated
-```
+> ARCHIWALNE — NIEAKTUALNE
 
-### After Refactoring
-```
-workers/worker/src/
-├── utils/ ✅ NEW
-│   ├── json.ts (67 lines)
-│   │   ├── isString() ✅ shared
-│   │   ├── isRecord() ✅ shared
-│   │   ├── safeJsonParse() ✅ shared
-│   │   └── asStringField() ✅ shared
-│   ├── jsonrpc.ts (99 lines)
-│   │   ├── JsonRpcRequest ✅ shared
-│   │   ├── JsonRpcResponse ✅ shared
-│   │   ├── McpRequest ✅ shared
-│   │   └── McpResponse ✅ shared
-│   ├── mcp-client.ts (152 lines)
-│   │   ├── callMcpWithRetry() ✅ shared
-│   │   └── extractMcpTextContent() ✅ shared
-│   └── shopify-graphql.ts (55 lines)
-│       └── adminGraphql() ✅ shared
-├── rag.ts (677 lines, -41)
-├── shopify-mcp-client.ts (370 lines, -68)
-└── mcp_server.ts (311 lines, -56)
+Oryginalna treść tego dokumentu została przeniesiona do `docs/archive/REFACTORING_IMPACT.md`.
 
-workers/rag-worker/src/
-├── utils/ ✅ NEW
-│   ├── json.ts (67 lines)
-│   ├── jsonrpc.ts (99 lines)
-│   └── mcp-client.ts (152 lines)
-└── services/
-    └── shopify-mcp.ts (72 lines, -193)
-```
-
-## Code Metrics
-
-### Duplication Reduction
-
-| Component | Before (occurrences) | After | Lines Saved |
-|-----------|---------------------|-------|-------------|
-| `isString()` | 2 | 1 shared | ~10 |
-| `isRecord()` | 2 | 1 shared | ~10 |
-| `safeJsonParse()` | 2 | 1 shared | ~50 |
-| `asStringField()` | 1 + inline | 1 shared | ~20 |
-| `adminGraphql()` | 2 | 1 shared | ~60 |
-| JSON-RPC types | 4 | 1 shared | ~80 |
-| MCP retry logic | 3 | 1 shared | ~110 |
-| **TOTAL** | | | **~340 lines** |
-
-### File Size Impact
-
-| File | Before | After | Change |
-|------|--------|-------|--------|
-| `worker/src/rag.ts` | 718 | 677 | -41 (-6%) |
-| `worker/src/shopify-mcp-client.ts` | 438 | 370 | -68 (-16%) |
-| `worker/src/mcp_server.ts` | 367 | 311 | -56 (-15%) |
-| `rag-worker/src/services/shopify-mcp.ts` | 265 | 72 | -193 (-73%) |
-
-### New Utility Modules
-
-| Module | Lines | Purpose |
+Zachowano skróconą kopię w archiwum. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 |--------|-------|---------|
 | `utils/json.ts` | 67 | JSON utilities & type guards |
 | `utils/jsonrpc.ts` | 99 | JSON-RPC types & helpers |

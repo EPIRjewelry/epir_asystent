@@ -1,258 +1,121 @@
-# Podsumowanie Zmian — Optymalizacja AI Asystenta
+# Podsumowanie Stanu Aplikacji `epir_asystent` (Obecny Stan Repozytorium)
 
-## Data: 2026-01-03
+## Data Analizy: 2026-01-04
 
-### 🎯 Cele
-1. **Archiwizacja sesji DO → D1** dla długoterminowej analityki
-2. **Naprawa błędów cart_id** w narzędziach MCP
-3. **Optymalizacja długości promptu** (redukcja tokenów)
-4. **Truncation historii konwersacji** (sliding window)
+Niniejszy dokument przedstawia faktyczny stan architektury i implementacji aplikacji `epir_asystent`, bazując na analizie plików `wrangler.toml` oraz `src/index.ts` w istniejącym repozytorium. Skupia się na tym, co *jest wdrożone*, identyfikując kluczowe komponenty oraz występujące problemy.
 
 ---
 
-## ✅ Zrealizowane Zmiany
+## 1. Architektura Workerów Cloudflare (Obecny Stan)
 
-### 1. **Schemat D1 dla Archiwizacji Sesji**
-📁 `workers/worker/migrations/001_create_analytics_schema.sql`
+Repozytorium zawiera cztery aktywne workery, każdy z własnym plikiem `wrangler.toml` i punktem wejścia `src/index.ts`.
 
-**Tabele:**
-- `sessions` — metadata sesji (customer_id, cart_id, timestamps)
-- `messages` — archiwum wiadomości z DO
-- `tool_calls` — tracking wywołań narzędzi MCP
-- `usage_stats` — statystyki użycia tokenów i modeli
-- `cart_activity` — aktywność koszyka dla analityki
+### 1.1. `epir-ai-worker` (`services/ai-worker`)
+*   **Rola:** Dedykowany worker do inferencji AI, obsługujący komunikację z Groq API. Zaprojektowany jako serwis wywoływany przez Service Binding.
+*   **Bindingi:** Brak D1, DO, KV, Vectorize. Wymaga `GROQ_API_KEY`.
+*   **Implementacja:** Eksponuje endpointy `/stream`, `/harmony`, `/complete` dla streamingu i kompletowania odpowiedzi AI. Model AI jest **hardkodowany** jako `openai/gpt-oss-120b`.
 
-**Indeksy:** Zoptymalizowane dla query po session_id, timestamp, customer_id.
+### 1.2. `epir-analityc-worker` (`services/analytics-worker`)
+*   **Rola:** Worker analityczny, przeznaczony do zbierania zdarzeń z Shopify Web Pixel i analizy zachowań klientów. Odpowiedzialny za tworzenie i zarządzanie tabelami analitycznymi.
+*   **Bindingi:**
+    *   D1: `DB` do bazy `jewelry-analytics-db` (ID: `6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23`).
+    *   Durable Object: `SESSION_DO` (wskazuje na klasę zdefiniowaną w `epir-art-jewellery-worker`).
+    *   Service Binding: `AI_WORKER` do `epir-ai-worker` (do analizy zachowań/rekomendacji).
+*   **Implementacja (`src/index.ts`):** Tworzy i zarządza własnymi tabelami (`pixel_events`, `customer_sessions`, `customer_events`) w bazie `jewelry-analytics-db`. Zawiera logikę do analizy zachowań klientów i potencjalnej aktywacji czatu.
 
-**Wdrożenie:**
-```powershell
-# Produkcja
-wrangler d1 execute jewelry-analytics-db --remote --file=./migrations/001_create_analytics_schema.sql
+### 1.3. `epir-rag-worker` (`services/rag-worker`)
+*   **Rola:** Worker dedykowany do orkiestracji Retrieval Augmented Generation (RAG).
+*   **Bindingi:**
+    *   Vectorize: `VECTOR_INDEX` do `autorag-epir-chatbot-rag`.
+    *   AI: `AI` (do generowania embeddingów).
+    *   D1: `DB` do bazy `epir_art_jewellery` (ID: `6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23`) – **fizycznie jest to ta sama baza co `jewelry-analytics-db`**.
+*   **Implementacja (`src/index.ts`):** Eksponuje endpointy `/search/products`, `/search/policies`, `/context/build` do wyszukiwania produktów (MCP), polityk (Vectorize) i budowania pełnego kontekstu RAG.
 
-# Dev/Local
-wrangler d1 execute jewelry-analytics-db --local --file=./migrations/001_create_analytics_schema.sql
-```
-
----
-
-### 2. **Funkcja Archiwizacji w SessionDO**
-📁 `workers/worker/src/durable_objects/session_do.ts`
-
-**Zmiany:**
-- Dodano pole `env` w konstruktorze SessionDO (dostęp do D1 binding)
-- Funkcja `archiveToD1()` — zapisuje stare wiadomości do D1 przed usunięciem z DO
-- Trigger: automatyczne archiwizacja gdy liczba wiadomości > ARCHIVE_THRESHOLD (150)
-
-**Korzyści:**
-- Długoterminowa analityka rozmów
-- Możliwość query po kliencie, dacie, narzędziach
-- Zachowanie limitów DO (max 200 wiadomości)
+### 1.4. `epir-art-jewellery-worker` (`services/worker`)
+*   **Rola:** Główny worker aplikacji, hostujący Durable Objects sesji czatu. Pełni rolę koordynatora dialogu z klientem.
+*   **Bindingi:**
+    *   Durable Objects: `SESSION_DO`, `RATE_LIMITER_DO`, `TOKEN_VAULT_DO`.
+    *   D1: `DB` do bazy `jewelry-analytics-db` (ID: `6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23`).
+    *   D1: `DB_CHATBOT` do bazy `ai-assistant-sessions-db` (ID: `475a1cb7-f1b5-47ba-94ed-40fd64c32451`).
+    *   KV: `SESSIONS_KV`.
+    *   AI: `AI` (bezpośrednie połączenie z Groq API).
+    *   Fetcher: `RAG_WORKER` (do `epir-rag-worker`).
+*   **Implementacja (`src/index.ts`):** Zarządza `SessionDO` (sesje czatu). Posiada własne, **bezpośrednie połączenie z modelem AI (Groq API), mimo istnienia `epir-ai-worker`**. Importuje funkcje RAG (`searchShopPoliciesAndFaqs` itp.) z `rag-client-wrapper`, ale logika RAG jest realizowana poprzez narzędzia wywoływane przez AI, co budzi wątpliwości co do jej efektywności.
 
 ---
 
-### 3. **Normalizacja cart_id i Retry Logic**
-📁 `workers/worker/src/utils/cart.ts`  
-📁 `workers/worker/src/utils/retry.ts`  
-📁 `workers/worker/src/mcp_server.ts`
+## 2. Zdiagnozowane Problemy Architektoniczne
 
-**Problemy rozwiązane:**
-- Błąd "Invalid cart_id format" gdy cart_id zawiera spacje
-- Brak klucza `?key=...` w GID
-- Niepoprawne wywołania get_cart/update_cart
+1.  **Krytyczny Konflikt D1: Współdzielenie `jewelry-analytics-db`**
+    *   **Problem:** Baza D1 o `database_id = "6a4f7cbb-3c1c-42c7-9d79-4ef74d421f23"` jest współdzielona przez `epir-analityc-worker` (dla danych web-pixela), `epir-rag-worker` (dla cachingu RAG) oraz `epir-art-jewellery-worker` (ogólny binding `DB`).
+    *   **Konsekwencje:** Prowadzi to do konfliktów schematów (np. błędy "no such column"), utraty integralności danych i utrudnia zrozumienie, kto jest właścicielem jakich danych.
 
-**Funkcje:**
-- `normalizeCartId()` — czyści spacje, dodaje klucz z sesji jeśli brakuje
-- `isValidCartGid()` — walidacja formatu GID
-- `parseCartGid()` — ekstrakcja ID i klucza
-- `buildCartUrl()` — budowanie linku do kasy
+2.  **Nieskuteczność i Niejasność RAG**
+    *   **Problem:** Pomimo istnienia dedykowanego `epir-rag-worker` i bindingów do Vectorize/AI, rzeczywista efektywność RAG jest niska (jak zgłoszono: "realnie nie działa"). `epir-art-jewellery-worker` importuje komponenty RAG, ale polega na narzędziach wywoływanych przez AI, co może być źródłem problemu.
+    *   **Konsekwencje:** Model AI nie wykorzystuje w pełni dostępnego kontekstu, prowadząc do mniej precyzyjnych lub "halucynowanych" odpowiedzi.
 
-**Retry logic:**
-- `withRetry()` — automatyczne ponowienie na błędach sieciowych/timeout
-- `isCartIdError()` — detekcja błędów cart_id
-- `buildToolErrorMessage()` — przyjazne komunikaty dla użytkownika
+3.  **"Niewidzialne" Dane z Web-Pixela**
+    *   **Problem:** `epir-analityc-worker` aktywnie zbiera i zapisuje dane z Web Pixela do `jewelry-analytics-db`, tworząc rozbudowany schemat tabel (`pixel_events`, `customer_sessions`, `customer_events`). Jednak brakuje jasnej warstwy konsumpcji i wizualizacji tych danych.
+    *   **Konsekwencje:** Zebrane dane analityczne mają niską wartość biznesową, ponieważ nie są łatwo dostępne ani wykorzystywane do raportowania czy podejmowania decyzji.
 
-**Integracja w MCP:**
-- `normalizeCartArgs()` — wywołuje normalizację przed MCP call
-- Walidacja cart_id przed wysłaniem do Shopify API
+4.  **Brak Spójnej Orkiestracji AI i Złożoność Ról Workerów**
+    *   **Problem:** `epir-art-jewellery-worker` (główny worker czatu) ma bezpośrednie połączenie z Groq API (hardkodowany model), mimo istnienia `epir-ai-worker` dedykowanego do inferencji. To samo dotyczy RAG, gdzie funkcje są importowane, ale nie ma klarownego, scentralizowanego podejścia do orkiestracji AI.
+    *   **Konsekwencje:** Duplikacja funkcjonalności, trudności w zarządzaniu modelami AI, brak jasnego podziału odpowiedzialności i zwiększona złożoność kodu.
 
----
+5.  **Ograniczenie Shopify App Proxy**
+    *   **Problem:** Konieczność kierowania całego ruchu aplikacji przez jedno Shopify App Proxy wymusza skomplikowany routing lub tendencje do tworzenia monolitycznych workerów (np. `epir-art-jewellery-worker`), co obniża klarowność i skalowalność.
+    *   **Konsekwencje:** Zwiększona złożoność w routerze, trudności w izolacji i skalowaniu poszczególnych funkcjonalności.
 
-### 4. **Optymalizacja System Prompt**
-📁 `workers/worker/src/prompts/luxury-system-prompt.ts`
-
-**Redukcja:** ~4939 → ~1840 znaków (**62% redukcja**)
-
-**Zmiany:**
-- Usunięcie redundancji i verbose instrukcji
-- Skrócenie przykładów (zachowano kluczowe)
-- Kompresja zasad bez utraty funkcjonalności
-- Backup oryginalnego promptu w zmiennej `LUXURY_SYSTEM_PROMPT_V2_FULL`
-
-**Korzyści:**
-- Mniej tokenów per request → niższe koszty
-- Szybsze przetwarzanie
-- Więcej miejsca na kontekst historii
+6.  **Historyczne Obciążenie `epir-art-jewellery-worker` jako "main"**
+    *   **Problem:** Nazwa workera i jego historyczna rola jako "głównego" doprowadziły do kumulacji wielu odpowiedzialności, które powinny być rozdzielone na bardziej wyspecjalizowane komponenty.
+    *   **Konsekwencje:** Brak jasnej pojedynczej odpowiedzialności, utrudniający rozwój i utrzymanie.
 
 ---
 
-### 5. **Truncation Historii (Sliding Window)**
-📁 `workers/worker/src/utils/history.ts`  
-📁 `workers/worker/src/index.ts`
+## 3. Kluczowe Funkcjonalności (Obecny Stan)
 
-**Funkcje:**
-- `estimateTokens()` — szacowanie liczby tokenów (~3.5 znaków/token dla PL)
-- `calculateMessageTokens()` — suma tokenów dla tablicy wiadomości
-- `truncateHistory()` — sliding window (zachowuje ostatnie N wiadomości)
-- `truncateWithSummary()` — sliding window + streszczenie starych wiadomości
+Poniżej przedstawiono zaimplementowane funkcjonalności i ich obecny stan:
 
-**Parametry:**
-- `maxTokens`: 8000 (default)
-- `keepRecentCount`: 12 ostatnich wiadomości
+### 3.1. Schemat D1 dla Archiwizacji Sesji (Częściowo wdrożony)
+*   **Plik:** `workers/worker/migrations/001_create_analytics_schema.sql` (schemat ten, z tabelami `sessions`, `messages`, `tool_calls`, `usage_stats`, `cart_activity`, jest aplikowany do `jewelry-analytics-db`).
+*   **`epir-art-jewellery-worker`** posiada binding `DB_CHATBOT` do dedykowanej bazy `ai-assistant-sessions-db` (`475a1cb7-f1b5-47ba-94ed-40fd64c32451`) dla archiwizacji sesji.
 
-**Integracja:**
-- Wywołanie `truncateWithSummary()` w `streamAssistantResponse` przed wysłaniem do AI
-- Logi pokazują: przed/po truncation, szacowaną liczbę tokenów
+### 3.2. Funkcja Archiwizacji w Durable Object (`SessionDO`)
+*   **Plik:** `workers/worker/src/durable_objects/session_do.ts`
+*   **Implementacja:** `SessionDO` zawiera logikę do archiwizacji wiadomości do D1 (prawdopodobnie do `env.DB_CHATBOT`) po przekroczeniu progu (`ARCHIVE_THRESHOLD`) wiadomości. Używa wewnętrznego bufora w pamięci, a nie wewnętrznego SQLite DO.
 
-**Korzyści:**
-- Zapobiega overflow kontekstu (> 32k tokenów)
-- Zachowuje ciągłość rozmowy (streszczenie starych wiadomości)
-- Znacznie szybsze odpowiedzi AI
+### 3.3. Normalizacja `cart_id` i Retry Logic
+*   **Pliki:** `workers/worker/src/utils/cart.ts`, `workers/worker/src/utils/retry.ts`, `workers/worker/src/mcp_server.ts`
+*   **Implementacja:** Funkcje takie jak `normalizeCartId()` i `withRetry()` są zaimplementowane w celu obsługi błędów formatowania `cart_id` i ponawiania operacji sieciowych. Zintegrowane w wywołaniach MCP.
 
----
+### 3.4. Optymalizacja System Prompt
+*   **Plik:** `workers/worker/src/prompts/luxury-system-prompt.ts`
+*   **Implementacja:** Systemowy prompt został zredukowany (~62% redukcji znaków) w celu obniżenia kosztów tokenów i przyspieszenia przetwarzania.
 
-## 📊 Metryki Przed/Po
-
-| Metryka | Przed | Po | Zmiana |
-|---------|-------|-----|--------|
-| System Prompt (znaki) | ~4939 | ~1840 | **-62%** |
-| Max history (messages) | 20 | 12 (+ summary) | Zoptymalizowane |
-| Tokens per request (avg) | ~25,000 | ~12,000 | **-52%** |
-| Cart_id errors | Częste | Rzadkie | **-80%** (szacowane) |
-| DO archival | Brak | D1 archival | ✅ Dodane |
+### 3.5. Truncation Historii (Sliding Window)
+*   **Pliki:** `workers/worker/src/utils/history.ts`, `workers/worker/src/index.ts`
+*   **Implementacja:** Funkcje `estimateTokens()`, `truncateHistory()`, `truncateWithSummary()` są używane do zarządzania długością historii konwersacji, zapobiegając przepełnieniu kontekstu LLM.
 
 ---
 
-## 🚀 Wdrożenie
+## 4. Wdrożenie i Testy (Obecny Stan)
 
-### Krok 1: Migracja D1
-```powershell
-cd C:\Users\user\epir_asystent\workers\worker
-
-# Produkcja
-wrangler d1 execute jewelry-analytics-db --remote --file=./migrations/001_create_analytics_schema.sql
-
-# Dev (opcjonalne)
-wrangler d1 execute jewelry-analytics-db --local --file=./migrations/001_create_analytics_schema.sql
-```
-
-### Krok 2: Deploy Worker
-```powershell
-cd C:\Users\user\epir_asystent\workers\worker
-wrangler deploy
-```
-
-### Krok 3: Weryfikacja
-```powershell
-# Sprawdź logi
-wrangler tail
-
-# Testuj normalizeCartId
-# (wywołaj get_cart z różnymi formatami cart_id)
-
-# Sprawdź D1 archivization
-wrangler d1 execute jewelry-analytics-db --remote --command="SELECT COUNT(*) FROM messages"
-```
+*   **Migracje D1:** Wdrożenie schematu odbywa się poprzez `wrangler d1 execute jewelry-analytics-db --remote --file=./migrations/001_create_analytics_schema.sql`.
+*   **Deploy Worker:** `wrangler deploy` w katalogu `workers/worker`.
+*   **Weryfikacja:** Instrukcje testowania obejmują sprawdzenie logów, normalizacji `cart_id` i archiwizacji D1.
 
 ---
 
-## 🧪 Testy
+## 5. Pliki Zmienione / Dodane (Obecny Stan)
 
-### Scenariusze do przetestowania:
-1. **Archiwizacja DO→D1:**
-   - Utwórz sesję z >150 wiadomościami
-   - Sprawdź czy stare wiadomości są w D1: `SELECT * FROM messages WHERE session_id = '...'`
-
-2. **Normalizacja cart_id:**
-   - Wywołaj `get_cart` z cart_id zawierającym spacje
-   - Wywołaj `update_cart` z cart_id bez klucza
-   - Sprawdź logi czy normalizacja działa
-
-3. **Truncation historii:**
-   - Utwórz długą rozmowę (>20 wiadomości)
-   - Sprawdź logi czy truncation jest aktywny
-   - Zweryfikuj czy AI nadal ma kontekst
-
-4. **Krótszy prompt:**
-   - Sprawdź logi: `System Prompt length: ~1840 chars`
-   - Porównaj z poprzednim: `~4939 chars`
+*   **Nowe pliki:** `workers/worker/migrations/001_create_analytics_schema.sql`, `workers/worker/src/utils/cart.ts`, `workers/worker/src/utils/retry.ts`, `workers/worker/src/utils/history.ts`.
+*   **Zmodyfikowane pliki:** `workers/worker/src/durable_objects/session_do.ts`, `workers/worker/src/mcp_server.ts`, `workers/worker/src/prompts/luxury-system-prompt.ts`, `workers/worker/src/index.ts`, `.gitignore`.
 
 ---
 
-## 📝 Pliki Zmienione
+## 6. Wnioski (Obecny Stan)
 
-### Nowe pliki:
-- `workers/worker/migrations/001_create_analytics_schema.sql`
-- `workers/worker/src/utils/cart.ts`
-- `workers/worker/src/utils/retry.ts`
-- `workers/worker/src/utils/history.ts`
+Obecna architektura `epir_asystent` wprowadza szereg optymalizacji i funkcjonalności (archiwizacja DO->D1, normalizacja `cart_id`, optymalizacja promptu, sliding window). Jednakże, złożoność wynikająca z wielu workerów, współdzielonej bazy D1 i braku spójnej orkiestracji AI (szczególnie w zakresie RAG i wykorzystania dedykowanych workerów AI) prowadzi do problemów z klarownością, utrzymywalnością i pełnym wykorzystaniem potencjału danych. Dane analityczne z Web Pixela są zbierane, ale ich wizualizacja i konsumpcja nie są w pełni zaimplementowane.
 
-### Zmodyfikowane pliki:
-- `workers/worker/src/durable_objects/session_do.ts`
-- `workers/worker/src/mcp_server.ts`
-- `workers/worker/src/prompts/luxury-system-prompt.ts`
-- `workers/worker/src/index.ts`
-- `.gitignore` (dodano `.venv`)
+**Status:** Aplikacja jest funkcjonalna w pewnym zakresie, ale boryka się z fundamentalnymi problemami architektonicznymi, które wymagają refaktoryzacji.
 
----
-
-## 🔍 Monitoring i Analityka
-
-### Query D1 dla analityki:
-
-```sql
--- Top klientów po liczbie wiadomości
-SELECT customer_id, COUNT(*) as msg_count
-FROM messages
-WHERE customer_id IS NOT NULL
-GROUP BY customer_id
-ORDER BY msg_count DESC
-LIMIT 10;
-
--- Najczęściej używane narzędzia
-SELECT tool_name, COUNT(*) as usage_count, AVG(duration_ms) as avg_duration
-FROM tool_calls
-GROUP BY tool_name
-ORDER BY usage_count DESC;
-
--- Statystyki tokenów per model
-SELECT model, SUM(total_tokens) as total, AVG(prompt_tokens) as avg_prompt
-FROM usage_stats
-GROUP BY model;
-
--- Aktywność koszyka
-SELECT action, COUNT(*) as count
-FROM cart_activity
-WHERE timestamp > strftime('%s', 'now', '-7 days') * 1000
-GROUP BY action;
-```
-
----
-
-## ⚠️ Uwagi
-
-1. **D1 Limits:** Bezpłatny plan: 5GB storage, 5M reads/day. Monitoruj usage.
-2. **Backup:** D1 nie ma automatycznych backupów na free tier — rozważ periodic export.
-3. **Retry Logic:** Domyślnie 3 próby z exponential backoff (100ms, 200ms, 400ms).
-4. **Truncation:** Można dostosować `maxTokens` i `keepRecentCount` w `truncateWithSummary()`.
-
----
-
-## 🎉 Podsumowanie
-
-Zmiany znacząco poprawiają:
-- **Wydajność:** Mniej tokenów → szybsze odpowiedzi, niższe koszty
-- **Niezawodność:** Normalizacja cart_id + retry → mniej błędów
-- **Analityka:** D1 archival → możliwość długoterminowej analizy
-- **Skalowalność:** Sliding window → obsługa długich rozmów bez overflow
-
-**Status:** ✅ Gotowe do wdrożenia (deploy po wykonaniu migracji D1)

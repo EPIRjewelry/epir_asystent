@@ -12,11 +12,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at INTEGER NOT NULL,
   last_activity INTEGER NOT NULL,
   archived_at INTEGER NOT NULL,
-  message_count INTEGER DEFAULT 0,
-  INDEX idx_customer (customer_id),
-  INDEX idx_archived_at (archived_at),
-  INDEX idx_created_at (created_at)
+  message_count INTEGER DEFAULT 0
 );
+
+-- Indexes for sessions
+CREATE INDEX IF NOT EXISTS idx_sessions_customer ON sessions(customer_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_archived_at ON sessions(archived_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
 
 -- Messages table: Individual conversation messages
 CREATE TABLE IF NOT EXISTS messages (
@@ -27,12 +29,14 @@ CREATE TABLE IF NOT EXISTS messages (
   timestamp INTEGER NOT NULL,
   tool_calls TEXT, -- JSON array of tool calls
   tool_call_id TEXT, -- For tool response messages
-  name TEXT, -- Tool name for tool responses
-  INDEX idx_session (session_id),
-  INDEX idx_timestamp (timestamp),
-  INDEX idx_role (role),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+  name TEXT -- Tool name for tool responses
+  -- FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
+
+-- Indexes for messages
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
 
 -- Tool calls table: Detailed tracking of MCP tool invocations
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -43,13 +47,15 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   result TEXT, -- JSON result or error
   status TEXT, -- 'success', 'error', 'timeout'
   duration_ms INTEGER,
-  timestamp INTEGER NOT NULL,
-  INDEX idx_session (session_id),
-  INDEX idx_tool_name (tool_name),
-  INDEX idx_timestamp (timestamp),
-  INDEX idx_status (status),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+  timestamp INTEGER NOT NULL
+  -- FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
+
+-- Indexes for tool_calls
+CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_name ON tool_calls(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_timestamp ON tool_calls(timestamp);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(status);
 
 -- Usage stats table: Token usage and model performance metrics
 CREATE TABLE IF NOT EXISTS usage_stats (
@@ -59,12 +65,14 @@ CREATE TABLE IF NOT EXISTS usage_stats (
   prompt_tokens INTEGER DEFAULT 0,
   completion_tokens INTEGER DEFAULT 0,
   total_tokens INTEGER DEFAULT 0,
-  timestamp INTEGER NOT NULL,
-  INDEX idx_session (session_id),
-  INDEX idx_model (model),
-  INDEX idx_timestamp (timestamp),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+  timestamp INTEGER NOT NULL
+  -- FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
+
+-- Indexes for usage_stats
+CREATE INDEX IF NOT EXISTS idx_usage_stats_session ON usage_stats(session_id);
+CREATE INDEX IF NOT EXISTS idx_usage_stats_model ON usage_stats(model);
+CREATE INDEX IF NOT EXISTS idx_usage_stats_timestamp ON usage_stats(timestamp);
 
 -- Cart activity: Track cart-related actions for analytics
 CREATE TABLE IF NOT EXISTS cart_activity (
@@ -75,9 +83,11 @@ CREATE TABLE IF NOT EXISTS cart_activity (
   product_id TEXT,
   variant_id TEXT,
   quantity INTEGER,
-  timestamp INTEGER NOT NULL,
-  INDEX idx_session (session_id),
-  INDEX idx_cart_id (cart_id),
-  INDEX idx_timestamp (timestamp),
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+  timestamp INTEGER NOT NULL
+  -- FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
+
+-- Indexes for cart_activity
+CREATE INDEX IF NOT EXISTS idx_cart_activity_session ON cart_activity(session_id);
+CREATE INDEX IF NOT EXISTS idx_cart_activity_cart_id ON cart_activity(cart_id);
+CREATE INDEX IF NOT EXISTS idx_cart_activity_timestamp ON cart_activity(timestamp);

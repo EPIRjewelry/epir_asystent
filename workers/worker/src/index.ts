@@ -29,7 +29,9 @@ import {
 } from './ai-client';
 import { GROQ_MODEL_ID } from './config/model-params';
 import { LUXURY_SYSTEM_PROMPT } from './prompts/luxury-system-prompt'; // 🟢 Używa nowego promptu v2
-import { TOOL_SCHEMAS } from './mcp_tools'; // 🟢 Używa poprawionych schematów v2import { truncateWithSummary } from './utils/history'; // 🟢 History truncationimport { callMcpToolDirect, handleMcpRequest } from './mcp_server';
+import { TOOL_SCHEMAS } from './mcp_tools'; // 🔵 Używa poprawionych schematów v2
+import { truncateWithSummary } from './utils/history'; // 🔵 History truncation
+import { callMcpToolDirect, handleMcpRequest } from './mcp_server';
 
 // Importy RAG (teraz używane tylko przez narzędzia, a nie przez index.ts)
 import {

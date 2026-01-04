@@ -1,19 +1,10 @@
 # PR #5 Analysis Documentation Index
 
-This directory contains a comprehensive analysis of Pull Request #5: "Refactor: Extract duplicated utilities to shared modules"
+> ARCHIWALNE — NIEAKTUALNE
 
-## 📋 Quick Navigation
+Oryginalna treść tego pliku została przeniesiona do `docs/archive/PR5_ANALYSIS_README.md`.
 
-### For Busy Reviewers (Start Here) ⭐
-👉 **[EXECUTIVE_SUMMARY.md](./EXECUTIVE_SUMMARY.md)** - Quick decision guide (5 min read)
-
-### For Detailed Review
-1. **[PR5_REVIEW_SUMMARY.md](./PR5_REVIEW_SUMMARY.md)** - Summary with actionable insights (10 min)
-2. **[PR5_REVIEW_ANALYSIS.md](./PR5_REVIEW_ANALYSIS.md)** - Deep technical analysis (20 min)
-3. **[PR5_VISUAL_COMPARISON.md](./PR5_VISUAL_COMPARISON.md)** - Before/after code examples (15 min)
-
----
-
+Zachowano kopię oryginału w katalogu `docs/archive/`. Jeśli plik powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 ## 🎯 TL;DR
 
 **Verdict:** ✅ **APPROVE & MERGE**  

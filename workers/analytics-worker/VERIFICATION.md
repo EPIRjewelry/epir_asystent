@@ -1,41 +1,8 @@
-# Analytics Worker Fix - Verification Guide
+> ARCHIWALNE — NIEAKTUALNE
 
-## Problem Summary
+Oryginalna treść tego pliku została przeniesiona do `docs/archive/workers/analytics-worker/VERIFICATION.md`.
 
-**Issue**: Production traffic from `epirbizuteria.pl` was not being saved to D1 database. Only test events were recorded, with `page_url` fields saving as `null`.
-
-**Root Cause**: The analytics worker only extracted `page_url` from `page_viewed` events using the Shopify Web Pixels API structure (`data.context.document.location.href`). Custom tracking events from `tracking.js` (click_with_position, scroll_depth, page_exit) send `page_url` under different field names (`url`, `pageUrl`, `page_url`, `href`), which were not being extracted.
-
-## Fix Applied
-
-Added a fallback extraction mechanism in `workers/analytics-worker/src/index.ts` that:
-
-1. **Prioritizes Shopify standard format** for `page_viewed` events
-2. **Falls back to multiple field naming conventions**:
-   - `data.url` (used by tracking.js)
-   - `data.pageUrl` (camelCase variant)
-   - `data.page_url` (snake_case variant)
-   - `data.href` (direct href variant)
-
-This ensures `page_url` is captured for ALL event types, not just `page_viewed`.
-
-## Verification Steps
-
-### 1. Run Smoke Test (Local/CI)
-
-Execute the smoke test script to send test events:
-
-```bash
-cd workers/analytics-worker
-./smoke-test.sh
-```
-
-This sends 5 test events with different `page_url` formats:
-- page_viewed (Shopify format)
-- product_viewed
-- click_with_position (url field)
-- scroll_depth (pageUrl field)
-- page_exit (page_url field)
+Zachowano kopię oryginału w katalogu `docs/archive/workers/analytics-worker/VERIFICATION.md`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 
 ### 2. Verify Data in D1
 

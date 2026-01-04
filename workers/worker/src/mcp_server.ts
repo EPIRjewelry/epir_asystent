@@ -88,6 +88,13 @@ function normalizeSearchArgs(raw: any) {
 function normalizeCartArgs(raw: any, sessionCartKey?: string): any {
   const args = { ...raw };
   
+  // Remove cart_id if it's null (Shopify MCP doesn't accept null, only undefined or valid string)
+  if (args.cart_id === null) {
+    delete args.cart_id;
+    console.log('[normalizeCartArgs] Removed null cart_id (will create new cart)');
+    return args;
+  }
+  
   // Normalize cart_id if present
   if (args.cart_id) {
     const normalized = normalizeCartId(args.cart_id, sessionCartKey);
@@ -208,37 +215,26 @@ export async function handleToolsCall(env: any, request: Request): Promise<Respo
     const tools = [
       {
         name: 'search_shop_catalog',
-        description: 'Search Shopify product catalog',
+        description: 'Search Shopify product catalog using natural language or keywords',
         inputSchema: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: 'Search query' },
-            context: { type: 'string', description: 'Domain context (e.g., biżuteria or conversation intent)' },
-            first: { type: 'number', default: 5 }
+            query: { type: 'string', description: 'Search query (keywords, product name, category)' },
+            context: { type: 'string', description: 'Additional context to help tailor results' }
           },
           required: ['query', 'context']
         }
       },
       {
-        name: 'update_cart',
-        description: 'Add, remove, or update items in the shopping cart',
+        name: 'search_shop_policies_and_faqs',
+        description: 'Answer questions about policies, shipping, returns, FAQs',
         inputSchema: {
           type: 'object',
           properties: {
-            cart_id: { type: ['string', 'null'], description: 'Cart ID (null for new cart)' },
-            lines: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  merchandiseId: { type: 'string', description: 'Product variant ID' },
-                  quantity: { type: 'number', description: 'Quantity to add/update' }
-                },
-                required: ['merchandiseId', 'quantity']
-              }
-            }
+            query: { type: 'string', description: 'The question about policies or FAQs' },
+            context: { type: 'string', description: 'Additional context (optional)' }
           },
-          required: ['lines']
+          required: ['query']
         }
       },
       {
@@ -253,20 +249,27 @@ export async function handleToolsCall(env: any, request: Request): Promise<Respo
         }
       },
       {
-        name: 'get_order_status',
-        description: 'Get status and details of a specific order',
+        name: 'update_cart',
+        description: 'Add, remove, or update items in the shopping cart',
         inputSchema: {
           type: 'object',
           properties: {
-            order_id: { type: 'string', description: 'Order ID to check' }
+            cart_id: { type: ['string', 'null'], description: 'Cart ID (null for new cart)' },
+            lines: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  line_item_id: { type: 'string', description: 'Existing cart line ID' },
+                  merchandise_id: { type: 'string', description: 'Product variant ID' },
+                  quantity: { type: 'number', description: 'Quantity to set' }
+                },
+                required: ['quantity']
+              }
+            }
           },
-          required: ['order_id']
+          required: ['lines']
         }
-      },
-      {
-        name: 'get_most_recent_order_status',
-        description: 'Get status of the most recent order',
-        inputSchema: { type: 'object', properties: {} }
       }
     ];
     return rpcResult(rpc.id ?? null, { tools });

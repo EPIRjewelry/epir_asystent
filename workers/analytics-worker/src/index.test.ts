@@ -45,8 +45,33 @@ describe('Analytics Worker - /pixel endpoint', () => {
                 error_message TEXT,
                 extension_id TEXT,
                 mouse_x INTEGER,
-                mouse_y INTEGER
+                mouse_y INTEGER,
+                referrer TEXT,
+                user_agent TEXT
             )
+        `).run();
+
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS customer_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_timestamp INTEGER NOT NULL,
+            event_data TEXT,
+            page_url TEXT,
+            page_title TEXT,
+            referrer TEXT,
+            product_id TEXT,
+            product_title TEXT,
+            product_price REAL,
+            variant_id TEXT,
+            cart_token TEXT,
+            cart_total REAL,
+            user_agent TEXT,
+            ip_address TEXT,
+            created_at INTEGER NOT NULL
+          )
         `).run();
     });
 
@@ -465,6 +490,55 @@ describe('Analytics Worker - /pixel endpoint', () => {
         expect(event).toBeTruthy();
         expect(event?.page_url).not.toBeNull();
         expect(event?.page_url).toBe('https://epirbizuteria.pl/test-page');
+    });
+
+    it('should extract page_url from nested data.page object', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'click_with_position',
+                data: {
+                    customerId: 'test-customer-123',
+                    sessionId: 'test-session-456',
+                    page: {
+                        url: 'https://epirbizuteria.pl/page-from-page',
+                        title: 'Page From PageObj'
+                    }
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+        const event = await env.DB.prepare('SELECT * FROM pixel_events WHERE event_type = ?')
+            .bind('click_with_position')
+            .first();
+        
+        expect(event).toBeTruthy();
+        expect(event?.page_url).toBe('https://epirbizuteria.pl/page-from-page');
+    });
+
+    it('should save full event JSON to customer_events.event_data', async () => {
+        const response = await SELF.fetch('https://example.com/pixel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'page_viewed',
+                data: {
+                    customerId: 'test-cust-json',
+                    sessionId: 'test-sess-json',
+                    url: 'https://epirbizuteria.pl/journey'
+                }
+            })
+        });
+
+        expect(response.status).toBe(200);
+        const ce = await env.DB.prepare('SELECT * FROM customer_events WHERE customer_id = ? AND session_id = ? ORDER BY created_at DESC LIMIT 1')
+            .bind('test-cust-json', 'test-sess-json')
+            .first();
+        expect(ce).toBeTruthy();
+        expect(ce?.event_data).toBeTruthy();
+        expect(ce?.event_data).toContain('page_viewed');
     });
 });
 

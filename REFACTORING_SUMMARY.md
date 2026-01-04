@@ -1,43 +1,10 @@
 # Code Refactoring Summary
 
-## Overview
-This document summarizes the code refactoring performed to eliminate duplicated code across the EPIR Assistant codebase.
+> ARCHIWALNE — NIEAKTUALNE
 
-## Refactored Components
+Oryginalna treść tego dokumentu została przeniesiona do `docs/archive/REFACTORING_SUMMARY.md`.
 
-### 1. JSON Utilities (`utils/json.ts`)
-**Location:** 
-- `workers/worker/src/utils/json.ts`
-- `workers/rag-worker/src/utils/json.ts`
-
-**Extracted Functions:**
-- `isString(v)` - Type guard for string values
-- `isRecord(v)` - Type guard for plain objects
-- `safeJsonParse(input)` - Safe JSON parsing with double-encoding support
-- `asStringField(obj, ...keys)` - Extract string field from object with fallback keys
-
-**Previously Duplicated In:**
-- `workers/worker/src/rag.ts`
-- `workers/rag-worker/src/services/shopify-mcp.ts`
-
-### 2. Shopify GraphQL Client (`utils/shopify-graphql.ts`)
-**Location:** `workers/worker/src/utils/shopify-graphql.ts`
-
-**Extracted Functions:**
-- `adminGraphql<T>(env, query, variables)` - Execute GraphQL queries against Shopify Admin API
-
-**Previously Duplicated In:**
-- `workers/worker/src/mcp_server.ts`
-- `workers/worker/src/shopify-mcp-client.ts`
-
-### 3. JSON-RPC Types and Utilities (`utils/jsonrpc.ts`)
-**Location:** 
-- `workers/worker/src/utils/jsonrpc.ts`
-- `workers/rag-worker/src/utils/jsonrpc.ts`
-
-**Extracted Types:**
-- `JsonRpcRequest` - JSON-RPC 2.0 request interface
-- `JsonRpcResponse<T>` - JSON-RPC 2.0 response interface
+Zachowano kopię oryginału w katalogu `docs/archive/`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 - `McpRequest` - MCP-specific request format
 - `McpResponse<T>` - MCP-specific response format
 - `McpContentItem` - MCP content item format

@@ -1,21 +1,8 @@
-# Analytics Worker - Event Tracking and Storage
+> ARCHIWALNE — NIEAKTUALNE
 
-## Overview
+Oryginalna treść tego pliku została przeniesiona do `docs/archive/workers/analytics-worker/README.md`.
 
-The Analytics Worker is responsible for receiving and storing customer behavior events from the Shopify Web Pixel (`my-web-pixel`). It tracks 25 different event types including:
-- 16 standard Shopify events (page views, product views, cart actions, checkout flow)
-- 5 DOM events (clicks, form submissions, input focus/blur/change)
-- 4 custom heatmap events (click positions, scroll depth, time on page, mouse movements)
-
-## Architecture
-
-```
-Shopify Storefront → my-web-pixel → POST /pixel → analytics-worker → D1 Database
-                                                   ↓
-                                            Session DO (notifications)
-                                                   ↓
-                                            AI Worker (behavior analysis)
-```
+Zachowano kopię oryginału w katalogu `docs/archive/workers/analytics-worker/README.md`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 
 ## Database Schema
 

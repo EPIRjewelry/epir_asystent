@@ -50,28 +50,29 @@ function corsHeaders(request: Request, env: Env): Record<string, string> {
 async function ensurePixelTable(db: D1Database): Promise<void> {
   console.log('[ANALYTICS_WORKER] 🔧 Ensuring pixel_events table exists...');
   
-  // Create table matching schema.sql structure (Shopify Web Pixels API + heatmap v3)
+  // Create table matching schema-pixel-events-base.sql + schema-pixel-events-v3-heatmap.sql
   try {
     await db
       .prepare(
         `CREATE TABLE IF NOT EXISTS pixel_events (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          customer_id TEXT,
-          session_id TEXT,
+          id TEXT PRIMARY KEY,
           event_type TEXT NOT NULL,
           event_name TEXT,
-          product_id TEXT,
-          product_handle TEXT,
-          product_type TEXT,
-          product_vendor TEXT,
-          product_title TEXT,
-          variant_id TEXT,
-          cart_id TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          customer_id TEXT,
+          session_id TEXT,
           page_url TEXT,
           page_title TEXT,
-          page_type TEXT,
-          event_data TEXT,
-          created_at INTEGER NOT NULL,
+          referrer TEXT,
+          user_agent TEXT,
+          product_id TEXT,
+          product_title TEXT,
+          product_variant_id TEXT,
+          product_price REAL,
+          product_quantity INTEGER,
+          cart_total REAL,
+          raw_data TEXT,
+          updated_at TEXT DEFAULT (datetime('now')),
           click_x INTEGER,
           click_y INTEGER,
           viewport_w INTEGER,
@@ -98,21 +99,21 @@ async function ensurePixelTable(db: D1Database): Promise<void> {
         )`
       )
       .run();
-    console.log('[ANALYTICS_WORKER] ✅ Table pixel_events ensured');
+    console.log('[ANALYTICS_WORKER] ✅ Table pixel_events ensured (schema aligned with SQL)');
   } catch (err) {
     console.error('[ANALYTICS_WORKER] ❌ Failed to create pixel_events table:', err);
     throw err;
   }
   
-  // Create indexes (idempotent)
+  // Create indexes exactly as defined in SQL files (idempotent)
   console.log('[ANALYTICS_WORKER] 🔧 Creating indexes...');
   try {
-    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_customer ON pixel_events(customer_id, created_at)`).run();
-    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_session ON pixel_events(session_id, created_at)`).run();
-    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_product ON pixel_events(product_id, created_at)`).run();
-    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_event_type ON pixel_events(event_type, created_at)`).run();
-    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_created_at ON pixel_events(created_at)`).run();
-    
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_events_customer ON pixel_events(customer_id, created_at DESC)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_events_session ON pixel_events(session_id, created_at DESC)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_events_type ON pixel_events(event_type, created_at DESC)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_events_page ON pixel_events(page_url, created_at DESC)`).run();
+    await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_events_product ON pixel_events(product_id, event_type, created_at DESC) WHERE product_id IS NOT NULL`).run();
+
     // Heatmap-specific indexes (v3)
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_clicks ON pixel_events(page_url, event_type, click_x, click_y) WHERE click_x IS NOT NULL`).run();
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_pixel_scroll ON pixel_events(page_url, scroll_depth_percent) WHERE scroll_depth_percent IS NOT NULL`).run();
@@ -378,25 +379,69 @@ Respond with JSON only:
       return false;
     }
     
-    const aiResult = await aiResponse.json() as { content: string };
-    const analysis = JSON.parse(aiResult.content);
-    
-    console.log('[ANALYTICS_WORKER] 🤖 AI Analysis:', analysis);
-    
-    // Update customer_sessions with AI score
+    const aiResult = await aiResponse.json().catch(() => null) as { content?: string } | null;
+    let analysis: { score?: number; should_activate_chat?: boolean; reason?: string } | null = null;
+
+    if (aiResult && typeof aiResult.content === 'string') {
+      try {
+        analysis = JSON.parse(aiResult.content);
+        console.log('[ANALYTICS_WORKER] 🤖 AI Analysis:', analysis);
+      } catch (parseErr) {
+        console.warn('[ANALYTICS_WORKER] ⚠️ Failed to parse AI response content, will fallback to heuristic:', parseErr);
+        analysis = null;
+      }
+    } else {
+      console.warn('[ANALYTICS_WORKER] ⚠️ AI Worker returned unexpected body, will fallback to heuristic');
+    }
+
+    // If AI returned valid analysis, persist and return decision
+    if (analysis && typeof analysis.score === 'number') {
+      await env.DB
+        .prepare(
+          'UPDATE customer_sessions SET ai_score = ?1, should_activate_chat = ?2 WHERE customer_id = ?3 AND session_id = ?4'
+        )
+        .bind(
+          analysis.score,
+          analysis.should_activate_chat ? 1 : 0,
+          customerId,
+          sessionId
+        )
+        .run();
+      return analysis.should_activate_chat === true;
+    }
+
+    // Fallback heuristic when AI is unavailable or returned invalid data
+    console.log('[ANALYTICS_WORKER] 🔁 Using heuristic fallback for customer behavior analysis');
+    const results = events.results as Array<any>;
+    const counts = results.reduce(
+      (acc, e) => {
+        acc.total += 1;
+        const t = String(e.event_type || '').toLowerCase();
+        if (t === 'product_viewed') acc.product_views += 1;
+        if (['product_added_to_cart', 'product_removed_from_cart', 'cart_updated'].includes(t)) acc.cart_actions += 1;
+        if (t.startsWith('checkout')) acc.checkout += 1;
+        if (t === 'search_submitted') acc.search += 1;
+        return acc;
+      },
+      { total: 0, product_views: 0, cart_actions: 0, checkout: 0, search: 0 }
+    );
+
+    // Simple scoring: product views are worth 15, cart actions 30, checkout 40, searches 10
+    let score = Math.min(
+      100,
+      counts.product_views * 15 + counts.cart_actions * 30 + counts.checkout * 40 + counts.search * 10
+    );
+
+    const shouldActivate = score >= 70;
+
+    // Persist heuristic score
     await env.DB
-      .prepare(
-        'UPDATE customer_sessions SET ai_score = ?1, should_activate_chat = ?2 WHERE customer_id = ?3 AND session_id = ?4'
-      )
-      .bind(
-        analysis.score,
-        analysis.should_activate_chat ? 1 : 0,
-        customerId,
-        sessionId
-      )
+      .prepare('UPDATE customer_sessions SET ai_score = ?1, should_activate_chat = ?2 WHERE customer_id = ?3 AND session_id = ?4')
+      .bind(score, shouldActivate ? 1 : 0, customerId, sessionId)
       .run();
-    
-    return analysis.should_activate_chat === true;
+
+    console.log('[ANALYTICS_WORKER] 🔎 Heuristic analysis', { counts, score, shouldActivate });
+    return shouldActivate;
   } catch (e) {
     console.error('[ANALYTICS_WORKER] ❌ AI analysis failed:', e);
     return false;
@@ -478,20 +523,23 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     const eventType = body.type; // e.g., 'product_viewed', 'page_viewed', 'cart_updated'
     const eventData = body.data || {};
     const timestamp = Date.now();
+    const createdAtIso = new Date(timestamp).toISOString();
+    const updatedAtIso = createdAtIso;
+    const userAgent = request.headers.get('User-Agent') || null;
+    const headerReferrer = request.headers.get('Referer') || request.headers.get('Referrer') || null;
     
     // Extract structured fields based on event type (Shopify Web Pixels API standard)
     let customerId: string | null = null;
     let sessionId: string | null = null;
     let productId: string | null = null;
-    let productHandle: string | null = null;
-    let productType: string | null = null;
-    let productVendor: string | null = null;
     let productTitle: string | null = null;
-    let variantId: string | null = null;
-    let cartId: string | null = null;
+    let productVariantId: string | null = null;
+    let productPrice: number | null = null;
+    let productQuantity: number | null = null;
+    let cartTotal: number | null = null;
     let pageUrl: string | null = null;
     let pageTitle: string | null = null;
-    let pageType: string | null = null;
+    let referrer: string | null = headerReferrer;
     
     // Parse event data (Shopify structure varies by event type)
     if (typeof eventData === 'object' && eventData !== null) {
@@ -503,38 +551,57 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
         if (variant.product && typeof variant.product === 'object') {
           const product = variant.product as Record<string, unknown>;
           productId = String(product.id || '');
-          productHandle = String(product.url || '').replace('/products/', ''); // Extract handle from URL
-          productType = String(product.type || '');
-          productVendor = String(product.vendor || '');
           productTitle = String(product.title || product.untranslatedTitle || '');
+          if (product.price && typeof product.price === 'object') {
+            const priceObj = product.price as Record<string, unknown>;
+            productPrice = typeof priceObj.amount === 'number' ? priceObj.amount : productPrice;
+          }
         }
-        variantId = String(variant.id || '');
+        productVariantId = String(variant.id || '');
+        if (variant.price && typeof variant.price === 'object') {
+          const priceObj = variant.price as Record<string, unknown>;
+          productPrice = typeof priceObj.amount === 'number' ? priceObj.amount : productPrice;
+        }
       }
       
       // Cart viewed event
       if (eventType === 'cart_viewed' && data.cart && typeof data.cart === 'object') {
         const cart = data.cart as Record<string, unknown>;
-        cartId = String(cart.id || cart.token || '');
+        if (cart.cost && typeof cart.cost === 'object') {
+          const cost = cart.cost as Record<string, unknown>;
+          const totalAmount = cost.totalAmount as Record<string, unknown> | undefined;
+          cartTotal = typeof totalAmount?.amount === 'number' ? totalAmount.amount : cartTotal;
+        }
       }
       
       // Product added to cart
       if (eventType === 'product_added_to_cart') {
         if (data.cartLine && typeof data.cartLine === 'object') {
           const cartLine = data.cartLine as Record<string, unknown>;
+          if (typeof cartLine.quantity === 'number') {
+            productQuantity = cartLine.quantity;
+          }
           if (cartLine.merchandise && typeof cartLine.merchandise === 'object') {
             const merch = cartLine.merchandise as Record<string, unknown>;
-            variantId = String(merch.id || '');
+            productVariantId = String(merch.id || '');
             if (merch.product && typeof merch.product === 'object') {
               const product = merch.product as Record<string, unknown>;
               productId = String(product.id || '');
               productTitle = String(product.title || '');
-              productHandle = String(product.handle || '');
+            }
+            if (merch.price && typeof merch.price === 'object') {
+              const priceObj = merch.price as Record<string, unknown>;
+              productPrice = typeof priceObj.amount === 'number' ? priceObj.amount : productPrice;
             }
           }
         }
         if (data.cart && typeof data.cart === 'object') {
           const cart = data.cart as Record<string, unknown>;
-          cartId = String(cart.id || cart.token || '');
+          if (cart.cost && typeof cart.cost === 'object') {
+            const cost = cart.cost as Record<string, unknown>;
+            const totalAmount = cost.totalAmount as Record<string, unknown> | undefined;
+            cartTotal = typeof totalAmount?.amount === 'number' ? totalAmount.amount : cartTotal;
+          }
         }
       }
       
@@ -542,26 +609,41 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
       if (eventType === 'product_removed_from_cart') {
         if (data.cartLine && typeof data.cartLine === 'object') {
           const cartLine = data.cartLine as Record<string, unknown>;
+          if (typeof cartLine.quantity === 'number') {
+            productQuantity = cartLine.quantity;
+          }
           if (cartLine.merchandise && typeof cartLine.merchandise === 'object') {
             const merch = cartLine.merchandise as Record<string, unknown>;
-            variantId = String(merch.id || '');
+            productVariantId = String(merch.id || '');
             if (merch.product && typeof merch.product === 'object') {
               const product = merch.product as Record<string, unknown>;
               productId = String(product.id || '');
               productTitle = String(product.title || '');
             }
+            if (merch.price && typeof merch.price === 'object') {
+              const priceObj = merch.price as Record<string, unknown>;
+              productPrice = typeof priceObj.amount === 'number' ? priceObj.amount : productPrice;
+            }
           }
         }
         if (data.cart && typeof data.cart === 'object') {
           const cart = data.cart as Record<string, unknown>;
-          cartId = String(cart.id || cart.token || '');
+          if (cart.cost && typeof cart.cost === 'object') {
+            const cost = cart.cost as Record<string, unknown>;
+            const totalAmount = cost.totalAmount as Record<string, unknown> | undefined;
+            cartTotal = typeof totalAmount?.amount === 'number' ? totalAmount.amount : cartTotal;
+          }
         }
       }
       
       // Cart updated event (Shopify Web Pixels API: data.cart.id)
       if (eventType === 'cart_updated' && data.cart && typeof data.cart === 'object') {
         const cart = data.cart as Record<string, unknown>;
-        cartId = String(cart.id || cart.token || '');
+        if (cart.cost && typeof cart.cost === 'object') {
+          const cost = cart.cost as Record<string, unknown>;
+          const totalAmount = cost.totalAmount as Record<string, unknown> | undefined;
+          cartTotal = typeof totalAmount?.amount === 'number' ? totalAmount.amount : cartTotal;
+        }
       }
       
       // Page viewed event (Shopify Web Pixels API: data.context.document.*)
@@ -573,33 +655,29 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
             const location = doc.location as Record<string, unknown> | undefined;
             pageUrl = String(location?.href || doc.url || '');
             pageTitle = String(doc.title || '');
-          }
-          if (context.window && typeof context.window === 'object') {
-            const win = context.window as Record<string, unknown>;
-            const shopify = win.Shopify as Record<string, unknown> | undefined;
-            const location = win.location as Record<string, unknown> | undefined;
-            const pathname = location?.pathname as string | undefined;
-            pageType = String(shopify?.designMode ? 'theme_editor' : pathname?.split('/')[1] || '');
+            if (doc.referrer && typeof doc.referrer === 'string') {
+              referrer = doc.referrer;
+            }
           }
         }
       }
+
+      // Fallback URL/title from custom payload (TAE custom events)
+      if (!pageUrl && typeof data.url === 'string') {
+        pageUrl = data.url;
+      }
+      if (!pageTitle && typeof data.title === 'string') {
+        pageTitle = data.title;
+      }
+      if (!referrer && typeof data.referrer === 'string') {
+        referrer = data.referrer;
+      }
       
-      // ============================================================================
-      // FALLBACK: Extract page_url from various field naming conventions
-      // ============================================================================
-      // Support multiple field naming patterns for page_url to handle:
-      // 1. Custom tracking events (tracking.js): data.url
-      // 2. Alternative naming: data.pageUrl, data.page_url
-      // 3. Direct href: data.href
-      // This ensures page_url is captured for all events, not just page_viewed
-      if (!pageUrl) {
-        const urlFields = ['url', 'pageUrl', 'page_url', 'href'];
-        for (const field of urlFields) {
-          if (typeof data[field] === 'string' && data[field]) {
-            pageUrl = data[field] as string;
-            break;
-          }
-        }
+      // [DODAJ TO] Obsługa zagnieżdżonego obiektu "page" (widocznego w Twoich logach)
+      if (typeof data.page === 'object' && data.page) {
+        const pageObj = data.page as Record<string, unknown>;
+        if (!pageUrl && typeof pageObj.url === 'string') pageUrl = pageObj.url;
+        if (!pageTitle && typeof pageObj.title === 'string') pageTitle = pageObj.title;
       }
       
       // Customer ID (from analytics.init.data or custom tracking)
@@ -755,26 +833,33 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     }
     
     // Store full event as JSON for debugging
-    const eventJson = JSON.stringify({ event: eventType, data: eventData, timestamp });
-    
+    const rawData = JSON.stringify({ event: eventType, data: eventData, timestamp });
+
+    // Normalize identifiers (avoid NULLs in D1 schemas)
+    const normalizedCustomerId = customerId ?? 'anonymous';
+    const normalizedSessionId = sessionId ?? `session_${timestamp}_${Math.random().toString(36).slice(2, 8)}`;
+    const eventId = crypto.randomUUID();
+
     console.log('[ANALYTICS_WORKER] 💾 Preparing INSERT with values:', {
       eventType,
       customerId,
       sessionId,
       productId,
-      cartId,
+      productVariantId,
       pageUrl,
       timestamp
     });
     
-    // Insert with structured columns (v3 schema with heatmap fields)
+    // Insert with structured columns (schema base + heatmap)
     const insertResult = await env.DB.prepare(
       `INSERT INTO pixel_events (
-        event_type, event_name, event_data, created_at,
+        id, event_type, event_name, created_at,
         customer_id, session_id,
-        product_id, product_handle, product_type, product_vendor, product_title, variant_id,
-        cart_id,
-        page_url, page_title, page_type,
+        page_url, page_title, referrer, user_agent,
+        product_id, product_title, product_variant_id, product_price, product_quantity,
+        cart_total,
+        raw_data,
+        updated_at,
         click_x, click_y, viewport_w, viewport_h,
         scroll_depth_percent, time_on_page_seconds,
         element_tag, element_id, element_class,
@@ -787,26 +872,30 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
       ) VALUES (
         ?1, ?2, ?3, ?4,
         ?5, ?6,
-        ?7, ?8, ?9, ?10, ?11, ?12,
-        ?13,
-        ?14, ?15, ?16,
-        ?17, ?18, ?19, ?20,
-        ?21, ?22,
-        ?23, ?24, ?25,
-        ?26, ?27,
-        ?28, ?29, ?30,
-        ?31, ?32, ?33,
-        ?34, ?35,
+        ?7, ?8, ?9, ?10,
+        ?11, ?12, ?13, ?14, ?15,
+        ?16,
+        ?17,
+        ?18,
+        ?19, ?20, ?21, ?22,
+        ?23, ?24,
+        ?25, ?26, ?27,
+        ?28, ?29,
+        ?30, ?31, ?32,
+        ?33, ?34, ?35,
         ?36, ?37,
-        ?38, ?39
+        ?38, ?39,
+        ?40, ?41
       )`
     )
     .bind(
-      eventType, eventType, eventJson, timestamp,
-      customerId, sessionId,
-      productId, productHandle, productType, productVendor, productTitle, variantId,
-      cartId,
-      pageUrl, pageTitle, pageType,
+      eventId, eventType, eventType, createdAtIso,
+      normalizedCustomerId, normalizedSessionId,
+      pageUrl, pageTitle, referrer, userAgent,
+      productId, productTitle, productVariantId, productPrice, productQuantity,
+      cartTotal,
+      rawData,
+      updatedAtIso,
       clickX, clickY, viewportW, viewportH,
       scrollDepth, timeOnPage,
       elementTag, elementId, elementClass,
@@ -826,38 +915,42 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
     // ============================================================================
     // CUSTOMER SESSION TRACKING & AI ANALYSIS
     // ============================================================================
-    // Insert event to customer_events table for journey tracking
-    await insertCustomerEvent(env.DB, customerId, sessionId, eventType, timestamp, {
-      pageUrl,
-      pageTitle,
-      productId,
-      productTitle,
-      variantId,
-      cartToken: cartId,
-    });
-    
     // Upsert customer session and trigger AI analysis for behavior scoring
     let activateChat = false;
-    if (customerId && sessionId) {
-      await upsertCustomerSession(env.DB, customerId, sessionId, timestamp);
+
+      // Upsert session counters (enables AI trigger cadence)
+      await upsertCustomerSession(env.DB, normalizedCustomerId, normalizedSessionId, timestamp);
+
+      // Insert event to customer_events table for journey tracking
+      await insertCustomerEvent(env.DB, normalizedCustomerId, normalizedSessionId, eventType, timestamp, {
+        pageUrl,
+        pageTitle,
+        productId,
+        productTitle,
+        productPrice,
+        variantId: productVariantId,
+        cartToken: null,
+        cartTotal,
+        eventDataJson: rawData
+      });
       
       // Get current event count for this session
       const sessionData = await env.DB
         .prepare('SELECT event_count FROM customer_sessions WHERE customer_id = ?1 AND session_id = ?2')
-        .bind(customerId, sessionId)
+        .bind(normalizedCustomerId, normalizedSessionId)
         .first<{ event_count: number }>();
       
       // Run AI analysis every 3 events (configurable threshold)
       const eventCount = sessionData?.event_count || 0;
-      if (eventCount % 3 === 0) {
-        console.log(`[ANALYTICS_WORKER] 🤖 Triggering AI analysis for customer ${customerId} (${eventCount} events)`);
-        const shouldActivate = await analyzeCustomerBehaviorWithAI(env, customerId, sessionId);
+      if (eventCount % 3 === 0 && eventCount > 0) {
+        console.log(`[ANALYTICS_WORKER] 🤖 Triggering AI analysis for customer ${normalizedCustomerId} (${eventCount} events)`);
+        const shouldActivate = await analyzeCustomerBehaviorWithAI(env, normalizedCustomerId, normalizedSessionId);
         
         if (shouldActivate) {
-          console.log(`[ANALYTICS_WORKER] 🚀 AI recommends activating proactive chat for ${customerId}`);
+          console.log(`[ANALYTICS_WORKER] 🚀 AI recommends activating proactive chat for ${normalizedCustomerId}`);
           
           // Double-check if chat should be activated (not already activated)
-          const finalCheck = await shouldActivateProactiveChat(env.DB, customerId, sessionId);
+          const finalCheck = await shouldActivateProactiveChat(env.DB, normalizedCustomerId, normalizedSessionId);
           if (finalCheck) {
             activateChat = true; // Set flag for response
             
@@ -867,24 +960,24 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
             // Session DO acts as coordinator (Cloudflare Best Practice for DO communication)
             try {
               if (env.SESSION_DO) {
-                const sessionDoId = env.SESSION_DO.idFromName(sessionId);
+                const sessionDoId = env.SESSION_DO.idFromName(normalizedSessionId);
                 const sessionDoStub = env.SESSION_DO.get(sessionDoId);
                 
                 await sessionDoStub.fetch('https://do/activate-proactive-chat', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
-                    customer_id: customerId,
-                    session_id: sessionId,
+                    customer_id: normalizedCustomerId,
+                    session_id: normalizedSessionId,
                     reason: 'high_engagement_score',
                     timestamp: timestamp
                   }),
                 });
                 
                 // Mark as activated in DB to prevent duplicate activations
-                await markChatActivated(env.DB, customerId, sessionId, timestamp);
+                await markChatActivated(env.DB, normalizedCustomerId, normalizedSessionId, timestamp);
                 
-                console.log(`[ANALYTICS_WORKER] ✅ Proactive chat activated for ${customerId}/${sessionId}`);
+                console.log(`[ANALYTICS_WORKER] ✅ Proactive chat activated for ${normalizedCustomerId}/${normalizedSessionId}`);
               } else {
                 console.warn('[ANALYTICS_WORKER] ⚠️ SESSION_DO not configured, cannot activate proactive chat');
               }
@@ -894,16 +987,15 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
           }
         }
       }
-    }
     
     // ============================================================================
     // INTEGRATION: Analytics Worker → Session DO (product view tracking)
     // ============================================================================
     // After storing to D1, notify Session DO about product views
     // This enables proactive chat triggers based on customer behavior
-    if (eventType === 'product_viewed' && productId && sessionId && env.SESSION_DO) {
+    if (eventType === 'product_viewed' && productId && normalizedSessionId && env.SESSION_DO) {
       try {
-        const sessionDoId = env.SESSION_DO.idFromName(sessionId);
+        const sessionDoId = env.SESSION_DO.idFromName(normalizedSessionId);
         const sessionDoStub = env.SESSION_DO.get(sessionDoId);
         
         await sessionDoStub.fetch('https://do/track-product-view', {
@@ -911,13 +1003,12 @@ async function handlePixelPost(request: Request, env: Env): Promise<Response> {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             product_id: productId,
-            product_type: productType,
             product_title: productTitle,
             duration: 0, // TODO: Calculate from frontend tracking
           }),
         });
         
-        console.log(`[ANALYTICS_WORKER] ✅ Notified Session DO: ${sessionId} viewed product ${productId}`);
+        console.log(`[ANALYTICS_WORKER] ✅ Notified Session DO: ${normalizedSessionId} viewed product ${productId}`);
       } catch (e) {
         console.error('[ANALYTICS_WORKER] ❌ Failed to notify Session DO:', e);
         // Don't fail the request if DO notification fails
@@ -1204,3 +1295,5 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
 };
+
+

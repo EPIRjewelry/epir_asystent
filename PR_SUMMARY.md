@@ -1,13 +1,10 @@
 # PR Summary: Fix Analytics Worker Ingestion for Production Traffic
 
-## Overview
-This PR fixes the critical issue where production traffic from `epirbizuteria.pl` was not being saved to the D1 database, with only test events being recorded and `page_url` fields saving as `null`.
+> ARCHIWALNE — NIEAKTUALNE
 
-## Problem Statement
-- **Symptom**: Only 1 test event in D1 in the last 24 hours (out of ~25 total records)
-- **Impact**: Real customer behavior (page views, product views, clicks, scrolls) not being tracked
-- **Root Cause**: Missing `page_url` extraction for custom tracking events that use different field naming conventions
+Oryginalna treść tego dokumentu została przeniesiona do `docs/archive/PR_SUMMARY.md`.
 
+Zachowano kopię oryginału w katalogu `docs/archive/`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 ## Technical Details
 
 ### Root Cause Analysis

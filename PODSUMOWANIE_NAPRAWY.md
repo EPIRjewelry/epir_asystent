@@ -88,81 +88,12 @@ Aplikacja EPIR Assistant zawierała **5 krytycznych błędów**, które uniemoż
 
 ---
 
-## 🚀 Następne Kroki
 
-### Rekomendowane Testy Przed Deployem:
+# Podsumowanie Naprawy - EPIR Assistant
 
-1. **Test Podstawowy:**
-   ```bash
-   # Uruchom lokalnie i otwórz w przeglądarce
-   cd workers/worker
+> ARCHIWALNE — NIEAKTUALNE
+
+Oryginalna treść tego dokumentu została przeniesiona do `docs/archive/PODSUMOWANIE_NAPRAWY.md`.
+
+Zachowano kopię oryginału w katalogu `docs/archive/`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
    npm run dev
-   ```
-
-2. **Test Czatu:**
-   - Otwórz stronę sklepu
-   - Kliknij ikonę asystenta
-   - Napisz wiadomość
-   - Sprawdź czy odpowiedź przychodzi
-
-3. **Test Koszyka:**
-   - Dodaj produkt do koszyka
-   - Zapytaj asystenta o koszyk
-   - Sprawdź czy widzi produkty
-
-4. **Test Sesji:**
-   - Odśwież stronę
-   - Sprawdź czy historia rozmowy została zachowana
-
----
-
-## 📝 Commity
-
-Wszystkie zmiany zostały zapisane w 3 commitach:
-
-1. `1d99c8f` - Naprawiono błędy w assistant.js
-2. `4eda33d` - Naprawiono błąd użycia zmiennej w index.ts  
-3. `782353a` - Dodano dokumentację problemów i napraw
-
----
-
-## 📚 Pełna Dokumentacja
-
-Szczegółowy raport techniczny znajduje się w pliku:
-**`PROBLEMY_I_NAPRAWY.md`**
-
----
-
-## 💡 Rekomendacje na Przyszłość
-
-1. **Dodać pre-commit hooks:**
-   ```bash
-   npm install --save-dev husky lint-staged
-   # Będzie sprawdzać składnię przed każdym commitem
-   ```
-
-2. **Dodać testy jednostkowe:**
-   - Test dla `getShopifyCartId()`
-   - Test dla `parseAssistantResponse()`
-   - Test dla `handleChat()`
-
-3. **Dodać CI/CD:**
-   - GitHub Actions do automatycznego testowania
-   - Automatyczny deploy po przejściu testów
-
-4. **Monitoring w produkcji:**
-   - Integracja z Sentry do śledzenia błędów
-   - Dashboard do monitorowania wydajności
-
----
-
-## ✅ Gotowe do Merge!
-
-Wszystkie problemy zostały naprawione. Pull Request jest gotowy do review i merge.
-
-**Branch:** `copilot/fix-client-assistant-errors`
-
----
-
-*Naprawiono przez GitHub Copilot Agent*
-*Data: 2025-11-17*

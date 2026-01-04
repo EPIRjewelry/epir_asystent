@@ -1,25 +1,10 @@
 # EXECUTIVE SUMMARY: PR #5 Code Review
 
-**PR Title:** Refactor: Extract duplicated utilities to shared modules  
-**PR Number:** #5  
-**Branch:** `copilot/refactor-duplicated-code` → `main`  
-**Review Date:** 2025-11-16  
-**Reviewer:** GitHub Copilot Coding Agent
+> ARCHIWALNE — NIEAKTUALNE
 
----
+Oryginalna treść tego dokumentu została przeniesiona do `docs/archive/EXECUTIVE_SUMMARY.md`.
 
-## 🎯 Quick Decision
-
-### ✅ **APPROVED FOR MERGE**
-
-This PR is **ready for immediate merge** with high confidence.
-
-**Confidence Level:** 95%  
-**Risk Level:** Very Low  
-**Quality Assessment:** Excellent (5/5 ⭐)
-
----
-
+Zachowano kopię oryginału w katalogu `docs/archive/`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 ## 📊 At-a-Glance Metrics
 
 | Aspect | Status | Details |

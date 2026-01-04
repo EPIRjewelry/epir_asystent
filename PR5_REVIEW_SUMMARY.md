@@ -1,17 +1,10 @@
 # PR #5 Code Review Summary
 
-## 🎯 Quick Summary
+> ARCHIWALNE — NIEAKTUALNE
 
-**Status:** ✅ **APPROVED** - Ready to merge with minor follow-up items
+Oryginalna treść tego dokumentu została przeniesiona do `docs/archive/PR5_REVIEW_SUMMARY.md`.
 
-**Impact:** Positive - Eliminates 340 lines of duplicated code, improves maintainability
-
-**Security:** ✅ No vulnerabilities detected (CodeQL scan passed)
-
-**Compilation:** ✅ RAG worker compiles, Main worker has 8 pre-existing errors (not introduced by PR)
-
----
-
+Zachowano kopię oryginału w katalogu `docs/archive/`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 ## 📊 Key Metrics
 
 | Metric | Value |

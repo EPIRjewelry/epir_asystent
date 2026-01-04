@@ -1,41 +1,8 @@
-# Deployment and Verification Guide
+> ARCHIWALNE — NIEAKTUALNE
 
-## Summary of Changes
+Oryginalna treść tego pliku została przeniesiona do `docs/archive/workers/analytics-worker/DEPLOYMENT.md`.
 
-This PR fixes the D1 database event storage issue in analytics-worker by adding comprehensive diagnostic logging and tests.
-
-## Changes Overview
-
-1. **Enhanced Diagnostic Logging** - All database operations now have detailed logging
-2. **Comprehensive Test Suite** - 10 tests covering all major event types
-3. **Documentation** - Complete README with troubleshooting guide
-4. **Security** - Fixed stack trace exposure vulnerability
-
-## Pre-Deployment Checklist
-
-- [x] All tests pass (10/10)
-- [x] Security scan clean (0 vulnerabilities)
-- [x] Code review completed
-- [x] Documentation updated
-
-## Deployment Steps
-
-### 1. Deploy the Worker
-
-```bash
-cd workers/analytics-worker
-npm install
-npm run deploy
-```
-
-### 2. Verify Deployment
-
-After deployment, verify the worker is running:
-
-```bash
-# Check worker status in Cloudflare dashboard
-# Workers & Pages → epir-analityc-worker → Logs
-```
+Zachowano kopię oryginału w katalogu `docs/archive/workers/analytics-worker/DEPLOYMENT.md`. Jeśli dokument powinien pozostać aktywny, zaktualizuj go w archiwum i przywróć tutaj.
 
 ### 3. Test Event Submission
 

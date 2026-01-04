@@ -1,119 +1,25 @@
 /**
  * worker/src/mcp_tools.ts
- * Definicje narzędzi MCP (JSON Schema) zgodne z OpenAI function-calling i MCP spec.
- * Walidacja wywołań narzędzi przed wykonaniem.
  * 
- * Zgodność z dokumentacją:
+ * Definicje narzędzi MCP zgodne z:
  * - OpenAI function-calling: https://platform.openai.com/docs/guides/function-calling
- * - Shopify MCP: narzędzia introspect_graphql_schema, validate_graphql_codeblocks, validate_theme_codeblocks, validate_component_codeblocks
- * - Harmony format: system message zawiera pełne JSON schemas dla wszystkich narzędzi
+ * - Shopify Storefront MCP: https://shopify.dev/docs/apps/build/storefront-mcp/servers/storefront
+ * 
+ * UWAGA: Tylko oficjalne narzędzia Shopify Storefront MCP!
+ * - search_shop_catalog
+ * - search_shop_policies_and_faqs
+ * - get_cart
+ * - update_cart
  */
 
 /**
- * JSON Schema definitions for MCP tools.
- * These are embedded in the system message to allow the LLM to generate valid tool calls.
+ * JSON Schema definitions for Shopify Storefront MCP tools.
+ * Format zgodny z OpenAI function-calling.
  */
 export const TOOL_SCHEMAS = {
-  introspect_graphql_schema: {
-    name: 'introspect_graphql_schema',
-    description: 'Returns available types, queries, mutations and fields for the shop\'s GraphQL schema. Always use this before generating GraphQL code to avoid hallucinations.',
-    parameters: {
-      type: 'object',
-      properties: {
-        endpoint: {
-          type: 'string',
-          description: 'GraphQL endpoint URL (e.g., https://shop.myshopify.com/admin/api/2024-07/graphql.json)'
-        },
-        auth: {
-          type: 'object',
-          properties: {
-            token: { type: 'string', description: 'Shopify Admin API access token' }
-          },
-          required: ['token']
-        },
-        includeExtensions: {
-          type: 'boolean',
-          description: 'Include GraphQL extensions (directives, etc.) in introspection result',
-          default: false
-        }
-      },
-      required: ['endpoint']
-    }
-  },
-
-  validate_graphql_codeblocks: {
-    name: 'validate_graphql_codeblocks',
-    description: 'Validates provided GraphQL queries/mutations against a given schema. Use this to ensure generated GraphQL code is correct before returning to user.',
-    parameters: {
-      type: 'object',
-      properties: {
-        schemaSnapshotId: {
-          type: 'string',
-          description: 'Schema snapshot ID from introspection (used to cache schema for performance)'
-        },
-        queries: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Array of GraphQL query/mutation strings to validate'
-        }
-      },
-      required: ['schemaSnapshotId', 'queries']
-    }
-  },
-
-  validate_theme_codeblocks: {
-    name: 'validate_theme_codeblocks',
-    description: 'Validates Liquid/JSON/CSS files for syntax correctness and referencing components. Use for theme customization and app blocks.',
-    parameters: {
-      type: 'object',
-      properties: {
-        files: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'File path (e.g., sections/header.liquid)' },
-              content: { type: 'string', description: 'File content to validate' }
-            },
-            required: ['path', 'content']
-          },
-          description: 'Array of theme files to validate'
-        },
-        validationMode: {
-          type: 'string',
-          enum: ['partial', 'full'],
-          description: 'Validation mode: partial (syntax only) or full (syntax + component references)',
-          default: 'partial'
-        }
-      },
-      required: ['files']
-    }
-  },
-
-  validate_component_codeblocks: {
-    name: 'validate_component_codeblocks',
-    description: 'Validates JS/TS component snippets for correct props and allowed component usage. Use for React/UI extensions.',
-    parameters: {
-      type: 'object',
-      properties: {
-        components: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Array of allowed component names (e.g., ["Button", "TextField", "Card"])'
-        },
-        codeSnippets: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Array of code snippets to validate'
-        }
-      },
-      required: ['codeSnippets']
-    }
-  },
-
   search_shop_catalog: {
     name: 'search_shop_catalog',
-    description: 'Search Shopify product catalog using natural language or keywords. Returns product details for answering customer queries.',
+    description: 'Search Shopify product catalog using natural language or keywords. Returns product details including name, price, URL, image, and description.',
     parameters: {
       type: 'object',
       properties: {
@@ -123,29 +29,41 @@ export const TOOL_SCHEMAS = {
         },
         context: {
           type: 'string',
-          description: 'Domain context for disambiguation (e.g., "biżuteria" or intent from the conversation)'
-        },
-        first: {
-          type: 'number',
-          description: 'Number of results to return (default: 5, max: 20)',
-          default: 5,
-          minimum: 1,
-          maximum: 20
+          description: 'Additional context to help tailor results (e.g., "Customer prefers silver jewelry")'
         }
       },
       required: ['query', 'context']
     }
   },
 
+  search_shop_policies_and_faqs: {
+    name: 'search_shop_policies_and_faqs',
+    description: 'Answer questions about the store\'s policies, products, and services. Use for questions about shipping, returns, refunds, FAQs, and store information.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The question about policies or FAQs'
+        },
+        context: {
+          type: 'string',
+          description: 'Additional context like current product (optional)'
+        }
+      },
+      required: ['query']
+    }
+  },
+
   get_cart: {
     name: 'get_cart',
-    description: 'Retrieve current shopping cart contents for a given cart ID.',
+    description: 'Retrieve current shopping cart contents, including item details and checkout URL.',
     parameters: {
       type: 'object',
       properties: {
         cart_id: {
           type: 'string',
-          description: 'Cart ID to retrieve'
+          description: 'ID of an existing cart (e.g., gid://shopify/Cart/abc123def456)'
         }
       },
       required: ['cart_id']
@@ -154,66 +72,59 @@ export const TOOL_SCHEMAS = {
 
   update_cart: {
     name: 'update_cart',
-    description: 'Add, remove, or update items in the shopping cart. Returns updated cart.',
+    description: 'Update quantities of items in an existing cart or add new items. Creates a new cart if no cart_id is provided. Set quantity to 0 to remove an item.',
     parameters: {
       type: 'object',
       properties: {
         cart_id: {
           type: ['string', 'null'],
-          description: 'Cart ID (null to create new cart)'
+          description: 'ID of the cart to update. Creates a new cart if not provided.'
         },
         lines: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
-              merchandiseId: {
+              line_item_id: {
                 type: 'string',
-                description: 'Product variant ID (gid://shopify/ProductVariant/...)'
+                description: 'ID of existing cart line to update (e.g., gid://shopify/CartLine/line2)'
+              },
+              merchandise_id: {
+                type: 'string',
+                description: 'Product variant ID (e.g., gid://shopify/ProductVariant/789012)'
               },
               quantity: {
                 type: 'number',
-                description: 'Quantity to add/update (0 to remove)',
+                description: 'Quantity to set (0 to remove)',
                 minimum: 0
               }
             },
-            required: ['merchandiseId', 'quantity']
+            required: ['quantity']
           },
-          description: 'Array of cart line items to update'
+          description: 'Array of cart line items to update or add'
         }
       },
       required: ['lines']
-    }
-  },
-
-  get_order_status: {
-    name: 'get_order_status',
-    description: 'Get status and details of a specific order by ID.',
-    parameters: {
-      type: 'object',
-      properties: {
-        order_id: {
-          type: 'string',
-          description: 'Order ID to check'
-        }
-      },
-      required: ['order_id']
-    }
-  },
-
-  get_most_recent_order_status: {
-    name: 'get_most_recent_order_status',
-    description: 'Get status of the most recent order for the current customer.',
-    parameters: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false
     }
   }
 };
 
 /**
- * Returns all tool schemas as JSON string (for embedding in system message).
+ * Returns tool schemas as array for OpenAI function-calling format.
+ */
+export function getToolDefinitions() {
+  return Object.values(TOOL_SCHEMAS).map((schema) => ({
+    type: 'function' as const,
+    function: {
+      name: schema.name,
+      description: schema.description,
+      parameters: schema.parameters,
+    },
+  }));
+}
+
+/**
+ * Returns all tool schemas as JSON string (for embedding in system message if needed).
  */
 export function getToolSchemasJson(): string {
   return JSON.stringify(Object.values(TOOL_SCHEMAS), null, 2);
