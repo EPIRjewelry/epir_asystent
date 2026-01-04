@@ -1,0 +1,23 @@
+{
+  "name": "epir-hydrogen",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hydrogen dev",
+    "build": "hydrogen build",
+    "start": "hydrogen preview",
+    "deploy": "npx shopify hydrogen deploy"
+  },
+  "dependencies": {
+    "@shopify/hydrogen": "^2024.10.0",
+    "@shopify/remix-oxygen": "^2.9.2",
+    "@remix-run/react": "^2.9.2",
+    "@remix-run/server-runtime": "^2.9.2",
+    "graphql": "^16.9.0",
+    "isbot": "^4.4.1"
+  },
+  "devDependencies": {
+    "@remix-run/dev": "^2.9.2",
+    "typescript": "^5.4.5"
+  }
+}
